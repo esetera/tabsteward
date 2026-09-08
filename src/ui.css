@@ -84,3 +84,5 @@ code { background: var(--chip); padding: 1px 4px; border-radius: 3px; font-size:
 .kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; font-size: 11px; }
 details summary { cursor: pointer; color: var(--muted); }
 .answer { white-space: pre-wrap; }
+.quick { display: flex; flex-wrap: wrap; gap: 4px; padding-top: 8px; }
+.quick button { font-size: 12px; padding: 3px 8px; border-radius: 12px; }

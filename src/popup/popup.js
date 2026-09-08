@@ -281,6 +281,19 @@ $('more').querySelectorAll('[data-open]').forEach((b) => b.addEventListener('cli
   if (!isPage) window.close();
 }));
 
+document.querySelectorAll('#quick [data-quick]').forEach((b) => b.addEventListener('click', async () => {
+  const kind = b.dataset.quick;
+  if (kind === 'closeStale' && !confirm('Close every tab past its staleness threshold? They go to the Attic and can be restored.')) return;
+  const label = b.textContent;
+  b.disabled = true; b.textContent = '…';
+  try {
+    const r = await send('quick', { kind });
+    toast(r.skipped ? 'Already busy' : r.executed ? `${r.executed} action${r.executed === 1 ? '' : 's'}, ${r.tabs} tab${r.tabs === 1 ? '' : 's'}` : 'Nothing to do');
+  } catch (e) { toast(e.message, 'err'); }
+  b.disabled = false; b.textContent = label;
+  refresh();
+}));
+
 $('tidy').addEventListener('click', async () => {
   $('tidy').disabled = true; $('tidy').textContent = 'Tidying…';
   try {

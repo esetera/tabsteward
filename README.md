@@ -17,7 +17,8 @@ Requires Firefox 139 or newer (native tab groups API).
 - **Read-later triage.** An article open for days is offered a bookmark folder and a spot in the Attic instead of another week in the tab strip.
 - **Focus mode.** Pick a group, everything else in the window hides for a timebox, then comes back.
 - **Projects.** Snapshot every group, "End of day" closes them all into the Attic, restore a project into a fresh window later.
-- **Ask your tabs.** Type to filter locally; press Ask and the model finds, closes, groups or summarises across your tabs.
+- **Tell the steward.** Type to filter locally, or press Enter with an instruction: "merge the two Firefox groups", "add the OpenRouter tabs to Dev", "rename Docs to Reading", "close everything about flights", "which tab has the pricing page". The model turns it into concrete steps, the add-on runs them in one undoable batch, and anything that closes or hides shows the plan first.
+- **Quick actions.** One click for Clean up (Alt+Shift+C), Dedupe, Group, Sleep all, Minimise (Alt+Shift+M), Expand all, Close stale. The ⋯ menu has Rethink all groups, which lets the model reorganise existing groups too.
 - **Windows.** Move a group to its own window, or gather same-named groups from every window into one.
 - **Tab notes.** A "why is this open" note per tab, drafted by the model if you like.
 - **Spend and privacy meter.** Estimated cost per month with a hard cap, a send log of every payload that left the browser, a never-send list for sensitive sites, and optional page excerpts behind an explicit all-sites permission.

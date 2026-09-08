@@ -1,6 +1,6 @@
 {
   "name": "tabsteward",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "description": "AI tab steward for Firefox",
   "type": "module",

@@ -140,6 +140,21 @@ describe('steward end to end (fake browser, no model)', () => {
     expect((await browser.tabGroups.query({ title: 'Dev' })).length).toBe(1);
   });
 
+  it('quick actions: dedupe, minimise, expand all', async () => {
+    await browser.storage.session.set({ tabCreated: {} });
+    const d = await steward.quick('dedupe');
+    expect(d.tabs).toBe(1);
+    expect((await browser.tabs.query({})).map((t) => t.id)).not.toContain(4);
+    await steward.quick('group');
+    const m = await steward.quick('minimise');
+    expect(m.executed).toBeGreaterThan(1);
+    expect((await browser.tabGroups.query({})).every((g) => g.collapsed)).toBe(true);
+    const awake = (await browser.tabs.query({})).filter((t) => !t.discarded && !t.active && !t.pinned);
+    expect(awake.length).toBe(0);
+    await steward.quick('expandAll');
+    expect((await browser.tabGroups.query({})).every((g) => !g.collapsed)).toBe(true);
+  });
+
   it('projects: save, end of day, restore', async () => {
     await browser.storage.session.set({ tabCreated: {} });
     await steward.tidy({ trigger: 'test', allowModel: false });

@@ -266,6 +266,52 @@ export async function preview({ allowModel = false } = {}) {
   return out;
 }
 
+// ---------- quick actions: one click, no sentence, always executed (the user pressed the button) ----------
+
+async function runActions(actions, trigger) {
+  const batchId = uid('batch');
+  const executed = [];
+  for (const a of actions) {
+    try { const e = await execute({ ...a, batchId, trigger }); if (e) executed.push(e); } catch (e) { await addLog({ type: 'error', reason: `${a.type} failed: ${String(e.message || e)}`, tabs: [] }); }
+  }
+  return { batchId, executed: executed.length, tabs: executed.reduce((n, e) => n + (e.tabs || []).length, 0) };
+}
+
+export const QUICK_KINDS = ['cleanup', 'dedupe', 'group', 'closeStale', 'sleepAll', 'collapseAll', 'expandAll', 'minimise'];
+
+export async function quick(kind) {
+  const ctx = await collectContext();
+  const running = await getSession('tidyRunning', 0);
+  if (running && Date.now() - running < 120000) return { skipped: 'already running' };
+  await setSession('tidyRunning', Date.now());
+  try {
+    switch (kind) {
+      case 'cleanup': {
+        const plan = (await planTidy(ctx, { allowModel: true })).filter((a) => ['ephemeral', 'dedupe', 'group'].includes(a.gate));
+        return runActions(plan, 'quick:cleanup');
+      }
+      case 'dedupe': return runActions((await planTidy(ctx, { allowModel: false })).filter((a) => a.gate === 'dedupe'), 'quick:dedupe');
+      case 'group': return runActions((await planTidy(ctx, { allowModel: true })).filter((a) => a.gate === 'group'), 'quick:group');
+      case 'closeStale': return runActions((await planTidy(ctx, { allowModel: false })).filter((a) => a.gate === 'close' && a.type === 'close'), 'quick:closeStale');
+      case 'sleepAll': {
+        const ids = ctx.tabs.filter((t) => !t.active && !t.pinned && !t.audible && !t.discarded && !t.hidden).map((t) => t.id);
+        return runActions(ids.length ? [{ type: 'sleep', tabIds: ids, reason: 'you put everything to sleep' }] : [], 'quick:sleepAll');
+      }
+      case 'collapseAll': return runActions(ctx.groups.filter((g) => !g.collapsed).map((g) => ({ type: 'collapse', groupId: g.id, title: g.title, reason: 'you collapsed everything' })), 'quick:collapseAll');
+      case 'expandAll': return runActions(ctx.groups.filter((g) => g.collapsed).map((g) => ({ type: 'expand', groupId: g.id, title: g.title, reason: 'you expanded everything' })), 'quick:expandAll');
+      case 'minimise': {
+        const ids = ctx.tabs.filter((t) => !t.active && !t.pinned && !t.audible && !t.discarded && !t.hidden).map((t) => t.id);
+        const actions = ctx.groups.filter((g) => !g.collapsed).map((g) => ({ type: 'collapse', groupId: g.id, title: g.title, reason: 'minimised' }));
+        if (ids.length) actions.push({ type: 'sleep', tabIds: ids, reason: 'minimised' });
+        return runActions(actions, 'quick:minimise');
+      }
+      default: throw new Error('Unknown quick action ' + kind);
+    }
+  } finally {
+    await setSession('tidyRunning', 0);
+  }
+}
+
 // ---------- new-tab auto grouping ----------
 
 export async function queueNewTab(tabId) {

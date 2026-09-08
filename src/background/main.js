@@ -105,6 +105,8 @@ browser.idle.onStateChanged.addListener(async (state) => {
 browser.commands.onCommand.addListener(async (command) => {
   if (command === 'tidy-now') await steward.tidy({ trigger: 'shortcut' });
   else if (command === 'undo-last') await steward.undoLast();
+  else if (command === 'cleanup') await steward.quick('cleanup');
+  else if (command === 'minimise') await steward.quick('minimise');
 });
 
 browser.notifications.onClicked.addListener(async () => {
@@ -135,6 +137,7 @@ const handlers = {
   popupOpened: () => steward.markPopupOpen(),
   tidy: (m) => steward.tidy({ trigger: m.regroupAll ? 'rethink' : 'manual', allowModel: m.allowModel !== false, regroupAll: !!m.regroupAll }),
   preview: (m) => steward.preview({ allowModel: !!m.allowModel }),
+  quick: (m) => steward.quick(m.kind),
   undoLast: () => steward.undoLast(),
   suggestions: () => steward.listSuggestions(),
   approve: (m) => steward.approveSuggestion(m.id),

@@ -151,6 +151,12 @@ try {
     const gathered = await call('gather', { title: 'Renamed' });
     check(gathered.ok, 'gather groups', gathered.error);
   }
+  const qm = await call('quick', { kind: 'minimise' });
+  check(qm.ok && qm.result.executed >= 1, 'quick: minimise', qm.ok ? `${qm.result.executed} actions` : qm.error);
+  const qe = await call('quick', { kind: 'expandAll' });
+  check(qe.ok, 'quick: expand all', qe.error);
+  const qc = await call('quick', { kind: 'cleanup' });
+  check(qc.ok, 'quick: clean up', qc.error);
   const attic = await call('attic:list');
   const first = attic.result[0];
   const restored = await call('attic:restore', { id: first.id });
