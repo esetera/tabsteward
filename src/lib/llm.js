@@ -129,20 +129,35 @@ export async function classifyWithModel(tabsForModel, existingGroups, { useCache
       pending.push(t);
     }
   }
+  // Small batches keep each model call short: a 7B local model generating one huge answer gets cut
+  // off by the server, while ten tabs per call answer in a few seconds. Failures are per batch.
+  const BATCH = 10;
   let fresh = [];
-  if (pending.length) {
-    const user = JSON.stringify({
-      existingGroups: existingGroups.map((g) => ({ title: g.title, category: g.category || null, sampleTitles: (g.sampleTitles || []).slice(0, 4) })),
-      tabs: pending.map(({ id, title, host, path, excerpt }) => ({ id, title, host, path, ...(excerpt ? { excerpt } : {}) }))
-    });
-    const result = await runTask('classify', { system: CLASSIFY_SYSTEM, user, schema: CLASSIFY_SCHEMA, maxTokens: 4096 });
-    const parsed = result.json;
-    if (!parsed || !Array.isArray(parsed.assignments)) throw new Error('Model returned no assignments');
-    const byId = new Map(pending.map((t) => [t.id, t]));
-    fresh = parsed.assignments
+  const byId = new Map(pending.map((t) => [t.id, t]));
+  const existing = existingGroups.map((g) => ({ title: g.title, category: g.category || null, sampleTitles: (g.sampleTitles || []).slice(0, 4) }));
+  let firstError = null;
+  for (let i = 0; i < pending.length; i += BATCH) {
+    const batch = pending.slice(i, i + BATCH);
+    const user = JSON.stringify({ existingGroups: existing, tabs: batch.map(({ id, title, host, path, excerpt }) => ({ id, title, host, path, ...(excerpt ? { excerpt } : {}) })) });
+    let parsed;
+    try {
+      const result = await runTask('classify', { system: CLASSIFY_SYSTEM, user, schema: CLASSIFY_SCHEMA, maxTokens: 2048 });
+      parsed = result.json;
+    } catch (e) {
+      firstError = firstError || e;
+      if (e instanceof SpendCapError || e instanceof NoProviderError) break;
+      continue;
+    }
+    if (!parsed || !Array.isArray(parsed.assignments)) continue;
+    const got = parsed.assignments
       .map((a) => ({ ...a, id: Number(a.id) }))
       .filter((a) => byId.has(a.id) && typeof a.group === 'string' && a.group.trim())
       .map((a) => ({ id: a.id, group: a.group.trim().slice(0, 40), category: CATEGORIES.includes(a.category) ? a.category : 'Misc', reason: String(a.reason || '').slice(0, 80) }));
+    fresh.push(...got);
+    // New groups the model just invented become reusable for the next batch.
+    for (const a of got) if (!existing.some((g) => g.title === a.group)) existing.push({ title: a.group, category: a.category, sampleTitles: [byId.get(a.id).title] });
+  }
+  if (fresh.length) {
     await updateState('classifyCache', {}, (c) => {
       const next = { ...c };
       for (const a of fresh) {
@@ -150,11 +165,11 @@ export async function classifyWithModel(tabsForModel, existingGroups, { useCache
         const key = urlKey(t.url || '');
         if (key) next[key] = { group: a.group, category: a.category, reason: a.reason, ts: now };
       }
-      // prune
       for (const [k, v] of Object.entries(next)) if (now - v.ts > CLASSIFY_CACHE_TTL) delete next[k];
       return next;
     });
   }
+  if (!fresh.length && firstError) throw firstError;
   return [...cached, ...fresh];
 }
 

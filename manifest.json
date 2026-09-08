@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Tab Steward",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "An AI tab steward for Firefox: groups, dedupes, sleeps and closes tabs under a policy you write in plain language. Every action is explained and reversible. Bring your own LLM key.",
   "browser_specific_settings": {
     "gecko": {

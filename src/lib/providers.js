@@ -99,7 +99,9 @@ export function resolveProvider(settings) {
   return { id, def, base: base.replace(/\/+$/, ''), model, apiKey, kind: def.kind, jsonMode: def.jsonMode, local };
 }
 
-export async function callModel(provider, { system, user, schema, maxTokens = 4096, timeoutMs = 60000, fetchImpl = fetch }) {
+export async function callModel(provider, { system, user, schema, maxTokens = 4096, timeoutMs, fetchImpl = fetch }) {
+  // Local models on ordinary laptops are slower than cloud endpoints; give them room.
+  if (!timeoutMs) timeoutMs = provider.local ? 180000 : 60000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -125,6 +127,10 @@ async function callOpenAiCompatible(provider, { system, user, schema, maxTokens,
   if (schema && provider.jsonMode === 'json_object') body.response_format = { type: 'json_object' };
   if (schema && provider.jsonMode === 'json_schema') body.response_format = { type: 'json_schema', json_schema: { name: 'reply', schema, strict: true } };
   let res = await fetchImpl(`${provider.base}/chat/completions`, { method: 'POST', headers, body: JSON.stringify(body), signal });
+  if (!res.ok && res.status >= 500) {
+    // Transient server failure (Ollama returns 500 when a generation is cut off); one retry.
+    res = await fetchImpl(`${provider.base}/chat/completions`, { method: 'POST', headers, body: JSON.stringify(body), signal });
+  }
   if (!res.ok && res.status === 400 && body.response_format && body.response_format.type === 'json_schema') {
     // Older servers know only json_object mode; the schema is still in the system prompt.
     body.response_format = { type: 'json_object' };
