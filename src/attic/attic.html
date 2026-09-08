@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Tab Steward Attic</title>
+  <link rel="stylesheet" href="../ui.css">
+</head>
+<body class="wide">
+  <div class="row">
+    <h1 class="grow">The Attic</h1>
+    <button id="open-settings" class="small">Settings</button>
+  </div>
+  <p class="hint">Every tab the steward closed, with the reason. Nothing is deleted from here until it expires or you say so. Restoring puts the tab back in its group.</p>
+  <div class="tabs-nav">
+    <button data-tab="attic" class="active">Closed tabs</button>
+    <button data-tab="log">Activity log</button>
+  </div>
+  <section id="tab-attic">
+    <div class="row">
+      <input id="search" type="text" class="grow" placeholder="Search closed tabs by title, site, group or reason">
+      <select id="reason-filter"><option value="">All reasons</option></select>
+      <button id="restore-shown" class="small">Restore all shown</button>
+      <button id="clear" class="small danger">Empty the Attic</button>
+    </div>
+    <div id="attic"></div>
+  </section>
+  <section id="tab-log" hidden>
+    <div id="log"></div>
+  </section>
+  <script type="module" src="attic.js"></script>
+</body>
+</html>

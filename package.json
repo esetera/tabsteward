@@ -1,0 +1,17 @@
+{
+  "name": "tabsteward",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AI tab steward for Firefox",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "lint": "web-ext lint --source-dir . --ignore-files 'test/**' 'node_modules/**' 'package*.json' 'vitest.config.js'",
+    "start": "web-ext run --source-dir . --firefox=/Applications/Firefox.app/Contents/MacOS/firefox",
+    "build": "web-ext build --source-dir . --overwrite-dest --ignore-files 'test/**' 'node_modules/**' 'package*.json' 'vitest.config.js' 'web-ext-artifacts/**'"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4",
+    "web-ext": "^8.9.0"
+  }
+}

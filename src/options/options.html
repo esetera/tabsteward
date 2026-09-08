@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Tab Steward settings</title>
+  <link rel="stylesheet" href="../ui.css">
+</head>
+<body class="wide">
+  <h1>Tab Steward settings</h1>
+  <p class="hint">Everything here stays in this browser. API keys are stored in local extension storage and never synced.</p>
+  <div class="tabs-nav">
+    <button data-tab="model" class="active">Model</button>
+    <button data-tab="policy">Policy</button>
+    <button data-tab="autonomy">Autonomy</button>
+    <button data-tab="timing">Timing</button>
+    <button data-tab="privacy">Privacy & spend</button>
+  </div>
+
+  <section id="tab-model">
+    <h3>Which model does the steward think with?</h3>
+    <p class="hint">Local models keep every byte on this machine. Cloud providers see tab titles and URL paths only, and never for sites on your never-send list.</p>
+    <label for="provider">Provider</label>
+    <select id="provider"></select>
+    <div id="provider-help" class="hint"></div>
+    <div id="provider-fields"></div>
+    <div class="row" style="margin-top:10px">
+      <button id="grant" class="small">Grant access to the API host</button>
+      <button id="fetch-models" class="small">Fetch model list</button>
+      <button id="test" class="small primary">Save & test</button>
+      <span id="test-status" class="status"></span>
+    </div>
+    <p class="hint">Keyboard: <span class="kbd">Alt+Shift+T</span> tidy now, <span class="kbd">Alt+Shift+Z</span> undo, <span class="kbd">Alt+Shift+S</span> open the steward. Change these under Add-ons → Manage extension shortcuts.</p>
+  </section>
+
+  <section id="tab-policy" hidden>
+    <h3>Your policy, in plain language</h3>
+    <p class="hint">One sentence per line. The model compiles it into rules that then run locally with no model calls. Without a model, a simple built-in parser handles the common shapes shown in the placeholder.</p>
+    <textarea id="policy" placeholder="Never close anything on github.com.
+Shopping tabs die after 3 days.
+Keep docs.python.org under Work.
+Ask me before closing anything I typed into.
+Never send mail.google.com to the model.
+Protect calendar.google.com."></textarea>
+    <div class="row" style="margin-top:8px">
+      <button id="compile" class="primary">Compile policy</button>
+      <span id="compile-status" class="status"></span>
+    </div>
+    <h3>Compiled rules</h3>
+    <div id="rules"></div>
+  </section>
+
+  <section id="tab-autonomy" hidden>
+    <h3>How much may the steward do on its own?</h3>
+    <p class="hint"><b>Auto</b> does it and logs it. <b>Confirm</b> queues it and pings you. <b>Suggest</b> queues it quietly for the next time you open the steward. Closing anything always goes through the Attic, where it can be restored for <span id="attic-days-inline">30</span> days.</p>
+    <div id="dials"></div>
+    <label class="inline"><input type="checkbox" id="autoTidy"> Tidy automatically on a schedule and when the computer goes idle</label>
+    <label class="inline"><input type="checkbox" id="autoGroupNewTabs"> Slot new tabs into a matching group as they open</label>
+    <label class="inline"><input type="checkbox" id="notifications"> Show a notification when suggestions need confirmation</label>
+  </section>
+
+  <section id="tab-timing" hidden>
+    <h3>Timing</h3>
+    <div class="grid2">
+      <div><label>Tidy every (minutes)</label><input type="number" id="tidyIntervalMinutes" min="5"></div>
+      <div><label>Leftover pages (sign-in callbacks, confirmations, empty tabs) close after (minutes)</label><input type="number" id="ephemeralMinutes" min="1"></div>
+      <div><label>Collapse a group after idle (hours)</label><input type="number" id="collapseIdleHours" min="0.5" step="0.5"></div>
+      <div><label>Hide a group after idle (hours)</label><input type="number" id="hideIdleHours" min="1"></div>
+      <div><label>Put tabs to sleep at this fraction of their close threshold</label><input type="number" id="sleepFraction" min="0.1" max="1" step="0.1"></div>
+      <div><label>Offer “read later” for articles open longer than (days)</label><input type="number" id="readLaterDays" min="1"></div>
+      <div><label>Keep closed tabs in the Attic for (days)</label><input type="number" id="atticDays" min="1"></div>
+      <div><label>Smallest group the steward will create (tabs)</label><input type="number" id="minGroupSize" min="1"></div>
+    </div>
+    <h3>Close after idle, by category (hours)</h3>
+    <p class="hint">Blank means the built-in default. Rules in your policy override these per site.</p>
+    <div id="stale" class="grid2"></div>
+    <div class="row" style="margin-top:10px"><button id="save-timing" class="primary">Save timing</button><span id="timing-status" class="status"></span></div>
+  </section>
+
+  <section id="tab-privacy" hidden>
+    <h3>What the model is allowed to see</h3>
+    <label class="inline"><input type="checkbox" id="localSeesEverything"> When the model is local (Ollama, LM Studio, a localhost endpoint), let it see every tab, ignoring the never-send list. Explicit “never send” rules still apply.</label>
+    <label class="inline"><input type="checkbox" id="sendContent"> Also send a short page excerpt (first lines and description) for better grouping. Requires access to all sites.</label>
+    <div class="row"><button id="grant-content" class="small">Grant access to all sites</button><span id="content-status" class="status"></span></div>
+    <label>Never-send list (one host per line). These tabs are only ever handled by the local heuristics when a cloud model is in use.</label>
+    <textarea id="neverSend"></textarea>
+    <div class="row" style="margin-top:8px"><button id="save-privacy" class="primary">Save privacy</button><span id="privacy-status" class="status"></span></div>
+
+    <h3>Spend</h3>
+    <div id="spend"></div>
+    <label>Monthly cap in USD (0 = no cap). Cloud calls stop when the estimate reaches the cap; local models are free and uncapped.</label>
+    <input type="number" id="monthlyCapUsd" min="0" step="0.5" style="max-width:160px">
+    <div class="row" style="margin-top:8px"><button id="save-cap" class="small">Save cap</button><button id="reset-spend" class="small">Reset meter</button><button id="clear-cache" class="small">Clear classification cache</button></div>
+
+    <h3>Send log</h3>
+    <p class="hint">The last 50 payloads that left the browser, exactly as sent. Local calls are marked.</p>
+    <div class="row"><button id="clear-log" class="small">Clear send log</button></div>
+    <div id="sendlog"></div>
+
+    <h3>Danger zone</h3>
+    <button id="reset" class="danger">Reset everything (settings, Attic, log, projects)</button>
+  </section>
+  <script type="module" src="options.js"></script>
+</body>
+</html>

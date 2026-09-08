@@ -1,0 +1,79 @@
+{
+  "manifest_version": 3,
+  "name": "Tab Steward",
+  "version": "0.1.0",
+  "description": "An AI tab steward for Firefox: groups, dedupes, sleeps and closes tabs under a policy you write in plain language. Every action is explained and reversible. Bring your own LLM key.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "tabsteward@pure.science",
+      "strict_min_version": "139.0",
+      "data_collection_permissions": {
+        "required": ["none"],
+        "optional": ["browsingActivity", "websiteContent"]
+      }
+    }
+  },
+  "icons": {
+    "48": "icons/icon.svg",
+    "96": "icons/icon.svg"
+  },
+  "permissions": [
+    "tabs",
+    "tabGroups",
+    "tabHide",
+    "sessions",
+    "storage",
+    "alarms",
+    "idle",
+    "notifications",
+    "scripting",
+    "bookmarks"
+  ],
+  "host_permissions": [
+    "https://api.openai.com/*",
+    "https://api.anthropic.com/*",
+    "https://api.deepseek.com/*",
+    "https://api.z.ai/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "optional_host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": ["src/background/main.js"],
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Tab Steward",
+    "default_popup": "src/popup/popup.html",
+    "default_icon": "icons/icon.svg"
+  },
+  "sidebar_action": {
+    "default_title": "Tab Steward",
+    "default_panel": "src/popup/popup.html?sidebar=1",
+    "default_icon": "icons/icon.svg",
+    "open_at_install": false
+  },
+  "options_ui": {
+    "page": "src/options/options.html",
+    "open_in_tab": true
+  },
+  "commands": {
+    "tidy-now": {
+      "suggested_key": { "default": "Alt+Shift+T" },
+      "description": "Tidy tabs now"
+    },
+    "undo-last": {
+      "suggested_key": { "default": "Alt+Shift+Z" },
+      "description": "Undo the last steward action"
+    },
+    "_execute_action": {
+      "suggested_key": { "default": "Alt+Shift+S" },
+      "description": "Open Tab Steward"
+    },
+    "_execute_sidebar_action": {
+      "description": "Toggle the Tab Steward sidebar"
+    }
+  }
+}

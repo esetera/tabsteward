@@ -1,0 +1,180 @@
+// Background event page: wires browser events to the steward and serves the UI over runtime messages.
+import * as steward from '../lib/steward.js';
+import { getSettings, saveSettings, getState, setState, updateState, updateSession, getSession, setSession } from '../lib/store.js';
+import { rebuildGroupKeys, touchGroup } from '../lib/groups.js';
+import { restoreAttic, deleteAttic, pruneAttic, undoBatch } from '../lib/actions.js';
+import { isInternalUrl } from '../lib/urls.js';
+import { providerStatus, getSpend, runTask, discoverModels } from '../lib/llm.js';
+import { PROVIDERS, resolveProvider, originForBase, isLocalProvider } from '../lib/providers.js';
+import { describeRule, validateRules } from '../lib/rules.js';
+
+const CONTENT_SCRIPT_ID = 'ts-formguard';
+
+async function scheduleTidy() {
+  const settings = await getSettings();
+  await browser.alarms.clear('tidy');
+  if (settings.autoTidy) browser.alarms.create('tidy', { periodInMinutes: Math.max(5, settings.tidyIntervalMinutes || 15) });
+  browser.alarms.create('attic-prune', { periodInMinutes: 24 * 60 });
+}
+
+async function ensureContentScript() {
+  try {
+    const granted = await browser.permissions.contains({ origins: ['<all_urls>'] });
+    const registered = await browser.scripting.getRegisteredContentScripts({ ids: [CONTENT_SCRIPT_ID] });
+    if (granted && !registered.length) {
+      await browser.scripting.registerContentScripts([{ id: CONTENT_SCRIPT_ID, js: ['src/content/formguard.js'], matches: ['<all_urls>'], runAt: 'document_idle', persistAcrossSessions: true }]);
+    } else if (!granted && registered.length) {
+      await browser.scripting.unregisterContentScripts({ ids: [CONTENT_SCRIPT_ID] });
+    }
+  } catch { /* scripting unavailable */ }
+}
+
+browser.runtime.onInstalled.addListener(async ({ reason }) => {
+  await scheduleTidy();
+  await rebuildGroupKeys();
+  await ensureContentScript();
+  if (reason === 'install') browser.runtime.openOptionsPage();
+});
+
+browser.runtime.onStartup.addListener(async () => {
+  await scheduleTidy();
+  await rebuildGroupKeys();
+  await ensureContentScript();
+});
+
+browser.tabs.onCreated.addListener(async (tab) => {
+  await updateSession('tabCreated', {}, (m) => ({ ...m, [tab.id]: Date.now() }));
+});
+
+browser.tabs.onUpdated.addListener(async (tabId, change, tab) => {
+  if (change.status !== 'complete') return;
+  if (tab.groupId !== -1 || tab.pinned || isInternalUrl(tab.url)) return;
+  const seen = await getSession('classified', {});
+  if (seen[tabId] === tab.url) return;
+  await updateSession('classified', {}, (m) => ({ ...m, [tabId]: tab.url }));
+  const settings = await getSettings();
+  if (settings.autoGroupNewTabs) await steward.queueNewTab(tabId);
+}, { properties: ['status'] });
+
+browser.tabs.onActivated.addListener(async ({ tabId }) => {
+  try {
+    const t = await browser.tabs.get(tabId);
+    await touchGroup(t.groupId);
+  } catch { /* gone */ }
+});
+
+browser.tabs.onRemoved.addListener(async (tabId) => {
+  await updateSession('tabCreated', {}, (m) => { const n = { ...m }; delete n[tabId]; return n; });
+  await updateSession('classified', {}, (m) => { const n = { ...m }; delete n[tabId]; return n; });
+});
+
+browser.tabGroups.onRemoved.addListener(async (group) => {
+  await updateSession('groupKeys', {}, (m) => { const n = { ...m }; delete n[group.id]; return n; });
+  await updateSession('groupActivity', {}, (m) => { const n = { ...m }; delete n[group.id]; return n; });
+});
+
+browser.tabGroups.onCreated.addListener(async (group) => {
+  await touchGroup(group.id);
+});
+
+browser.alarms.onAlarm.addListener(async (alarm) => {
+  if (alarm.name === 'tidy') await steward.tidy({ trigger: 'scheduled' });
+  else if (alarm.name === 'attic-prune') await pruneAttic();
+  else if (alarm.name === 'focus-end') await steward.endFocus();
+  else if (alarm.name === 'classify-pending') await steward.processPending();
+});
+
+browser.idle.onStateChanged.addListener(async (state) => {
+  if (state !== 'idle') return;
+  const settings = await getSettings();
+  if (settings.autoTidy) await steward.tidy({ trigger: 'idle' });
+});
+
+browser.commands.onCommand.addListener(async (command) => {
+  if (command === 'tidy-now') await steward.tidy({ trigger: 'shortcut' });
+  else if (command === 'undo-last') await steward.undoLast();
+});
+
+browser.notifications.onClicked.addListener(async () => {
+  await browser.tabs.create({ url: browser.runtime.getURL('src/popup/popup.html?page=1') });
+});
+
+browser.permissions.onAdded.addListener(ensureContentScript);
+browser.permissions.onRemoved.addListener(ensureContentScript);
+
+browser.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.settings) scheduleTidy();
+});
+
+async function testProvider(settings) {
+  const provider = resolveProvider(settings);
+  if (!provider) throw new Error('Provider not configured (missing key?)');
+  const origin = provider.id === 'custom' || isLocalProvider(provider) ? originForBase(provider.base) : provider.def.origin;
+  if (origin) {
+    const ok = await browser.permissions.contains({ origins: [origin] });
+    if (!ok) throw new Error(`Firefox has not granted access to ${origin}. Click "Grant access" first.`);
+  }
+  const r = await runTask('test', { system: 'Reply with JSON only.', user: 'Return {"ok": true}', schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false }, maxTokens: 64 });
+  return { ok: !!(r.json && r.json.ok), model: r.model, usage: r.usage, text: r.text.slice(0, 100) };
+}
+
+const handlers = {
+  overview: () => steward.overview(),
+  popupOpened: () => steward.markPopupOpen(),
+  tidy: (m) => steward.tidy({ trigger: 'manual', allowModel: m.allowModel !== false }),
+  undoLast: () => steward.undoLast(),
+  suggestions: () => steward.listSuggestions(),
+  approve: (m) => steward.approveSuggestion(m.id),
+  dismiss: (m) => steward.dismissSuggestion(m.id),
+  dismissAll: () => steward.dismissAllSuggestions(),
+  groupAction: (m) => steward.groupAction(m.kind, m),
+  showHidden: (m) => steward.showHiddenGroup(m.key),
+  gather: (m) => steward.gatherGroups(m.title),
+  createGroup: (m) => steward.createGroupFromTabs(m.tabIds, m.title, m.windowId),
+  'tabs:activate': async (m) => { const t = await browser.tabs.update(m.tabId, { active: true }); await browser.windows.update(t.windowId, { focused: true }); return true; },
+  'tabs:close': (m) => steward.closeTabs(m.tabIds, m.reason),
+  'tabs:sleep': (m) => steward.sleepTabs(m.tabIds),
+  ask: (m) => steward.ask(m.query),
+  'attic:list': () => getState('attic', []),
+  'attic:restore': (m) => restoreAttic(m.id, { activate: !!m.activate }),
+  'attic:restoreBatch': async (m) => { let n = 0; for (const id of m.ids) if (await restoreAttic(id)) n += 1; return n; },
+  'attic:delete': (m) => deleteAttic(m.id),
+  'attic:clear': () => setState('attic', []),
+  'log:list': () => getState('log', []),
+  'log:undo': (m) => undoBatch(m.batchId),
+  'projects:list': () => steward.listProjects(),
+  'projects:save': (m) => steward.saveProject(m.name, { windowId: m.windowId }),
+  'projects:restore': (m) => steward.restoreProject(m.id),
+  'projects:delete': (m) => steward.deleteProject(m.id),
+  'projects:endOfDay': () => steward.endOfDay(),
+  'focus:start': (m) => steward.startFocus(m.groupId, m.minutes),
+  'focus:end': () => steward.endFocus(),
+  'focus:status': () => steward.focusStatus(),
+  'note:set': (m) => steward.setNote(m.tabId, m.note),
+  'note:draft': (m) => steward.draftNote(m.tabId),
+  'settings:get': () => getSettings(),
+  'settings:save': (m) => saveSettings(m.patch),
+  'policy:compile': (m) => steward.compilePolicy(m.text),
+  'policy:describe': (m) => validateRules(m.rules).map(describeRule),
+  'provider:test': async (m) => testProvider(m.settings || (await getSettings())),
+  'provider:list': () => PROVIDERS,
+  'provider:models': (m) => discoverModels(m.settings),
+  'provider:status': () => providerStatus(),
+  spend: () => getSpend(),
+  'spend:reset': () => setState('spend', {}),
+  sendLog: () => getState('sendLog', []),
+  'sendLog:clear': () => setState('sendLog', []),
+  'cache:clear': () => setState('classifyCache', {}),
+  'permissions:contains': (m) => browser.permissions.contains({ origins: m.origins }),
+  'windows:list': () => browser.windows.getAll({ populate: false }),
+  'reset': async () => { await browser.storage.local.clear(); await scheduleTidy(); return true; }
+};
+
+browser.runtime.onMessage.addListener((message, sender) => {
+  const handler = handlers[message && message.type];
+  if (!handler) return Promise.resolve({ error: 'unknown message ' + (message && message.type) });
+  return Promise.resolve()
+    .then(() => handler(message, sender))
+    .then((result) => ({ ok: true, result }))
+    .catch((e) => ({ ok: false, error: String(e && e.message ? e.message : e), kind: e && e.constructor ? e.constructor.name : 'Error' }));
+});
