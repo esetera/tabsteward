@@ -133,7 +133,7 @@ async function testProvider(settings) {
 const handlers = {
   overview: () => steward.overview(),
   popupOpened: () => steward.markPopupOpen(),
-  tidy: (m) => steward.tidy({ trigger: 'manual', allowModel: m.allowModel !== false }),
+  tidy: (m) => steward.tidy({ trigger: m.regroupAll ? 'rethink' : 'manual', allowModel: m.allowModel !== false, regroupAll: !!m.regroupAll }),
   preview: (m) => steward.preview({ allowModel: !!m.allowModel }),
   undoLast: () => steward.undoLast(),
   suggestions: () => steward.listSuggestions(),

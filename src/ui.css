@@ -12,7 +12,7 @@ html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text); f
 body.popup { width: 400px; min-height: 420px; max-height: 600px; overflow-y: auto; }
 body.wide { width: auto; max-height: none; max-width: 980px; margin: 0 auto; padding: 16px; }
 a { color: var(--accent); }
-h1 { font-size: 15px; margin: 0; }
+h1 { font-size: 15px; margin: 0; white-space: nowrap; }
 h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 14px 0 6px; }
 h3 { font-size: 14px; margin: 18px 0 6px; }
 p.hint { color: var(--muted); margin: 4px 0 8px; }

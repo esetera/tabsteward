@@ -73,7 +73,7 @@ async function assignGroups(candidates, ctx, { allowModel = true } = {}) {
 
 // ---------- planning ----------
 
-export async function planTidy(ctx, { allowModel = true } = {}) {
+export async function planTidy(ctx, { allowModel = true, regroupAll = false } = {}) {
   const { settings, tabs, meta, groups, focus, created, now } = ctx;
   const actions = [];
   const scheduledClose = new Set();
@@ -113,13 +113,15 @@ export async function planTidy(ctx, { allowModel = true } = {}) {
     closable.forEach((t) => scheduledClose.add(t.id));
   }
 
-  // 3. Grouping of ungrouped tabs
-  const ungrouped = live.filter((t) => t.groupId === -1 && !t.pinned && !isInternalUrl(t.url) && !scheduledClose.has(t.id));
+  // 3. Grouping of ungrouped tabs (or every tab, when asked to rethink the groups)
+  const ungrouped = live.filter((t) => (regroupAll || t.groupId === -1) && !t.pinned && !isInternalUrl(t.url) && !scheduledClose.has(t.id));
   const assignments = ungrouped.length ? await assignGroups(ungrouped, ctx, { allowModel }) : new Map();
+  const groupTitleById = new Map(groups.map((g) => [g.id, (g.title || '').toLowerCase()]));
   const byWindowTitle = new Map();
   for (const t of ungrouped) {
     const a = assignments.get(t.id);
     if (!a) continue;
+    if (t.groupId !== -1 && groupTitleById.get(t.groupId) === a.title.toLowerCase()) continue; // already there
     const key = t.windowId + '||' + a.title.toLowerCase();
     if (!byWindowTitle.has(key)) byWindowTitle.set(key, { windowId: t.windowId, title: a.title, category: a.category, tabs: [], reasons: new Set(), forced: false });
     const bucket = byWindowTitle.get(key);
@@ -234,13 +236,13 @@ async function notifyOnce(count) {
   } catch { /* notifications unavailable */ }
 }
 
-export async function tidy({ trigger = 'manual', allowModel = true } = {}) {
+export async function tidy({ trigger = 'manual', allowModel = true, regroupAll = false } = {}) {
   const running = await getSession('tidyRunning', 0);
   if (running && Date.now() - running < 120000) return { skipped: 'already running' };
   await setSession('tidyRunning', Date.now());
   try {
     const ctx = await collectContext();
-    const actions = await planTidy(ctx, { allowModel });
+    const actions = await planTidy(ctx, { allowModel, regroupAll });
     const result = await applyPlan(actions, ctx.settings, { trigger });
     await pruneSuggestions();
     await setState('lastTidy', { ts: Date.now(), trigger, executed: result.executed.length, suggested: result.suggested.length });

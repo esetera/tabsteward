@@ -273,6 +273,7 @@ document.addEventListener('click', (e) => { if (!e.target.closest('.menu')) clos
 $('more-btn').addEventListener('click', (e) => { e.stopPropagation(); closeMenus(); $('more').classList.toggle('open'); });
 $('more').querySelectorAll('[data-open]').forEach((b) => b.addEventListener('click', () => {
   const what = b.dataset.open;
+  if (what === 'rethink') { rethink(); return; }
   if (what === 'options') browser.runtime.openOptionsPage();
   else if (what === 'attic') openAttic();
   else if (what === 'page') browser.tabs.create({ url: browser.runtime.getURL('src/popup/popup.html?page=1') });
@@ -309,6 +310,18 @@ $('preview').addEventListener('click', async () => {
     el.appendChild(card);
   } catch (e) { clear(el).appendChild(h('div', { class: 'banner' }, 'Could not plan: ' + e.message)); }
 });
+
+async function rethink() {
+  $('more').classList.remove('open');
+  if (!confirm('Let the model look at every tab, including ones already in groups, and reorganise them? Groups you made stay as candidates; tabs may move between groups. Undo reverses it.')) return;
+  $('tidy').disabled = true; $('tidy').textContent = 'Rethinking…';
+  try {
+    const r = await send('tidy', { regroupAll: true });
+    toast(r.skipped ? 'Already tidying' : `${r.executed.length} done, ${r.suggested.length} suggested`);
+  } catch (e) { toast(e.message, 'err'); }
+  $('tidy').disabled = false; $('tidy').textContent = 'Tidy now';
+  refresh();
+}
 
 $('undo').addEventListener('click', async () => {
   const n = await send('undoLast');

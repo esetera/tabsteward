@@ -79,40 +79,74 @@ export async function runTask(task, { system, user, schema, maxTokens }) {
 }
 
 // ---------- Classification ----------
+// Two steps. First the model sees every tab at once and proposes a small set of task-level groups
+// (short output, one call). Then tabs are assigned to those groups by index in batches (tiny output
+// per call). This keeps every call fast on a local model and keeps titles coherent across batches.
 
-const CLASSIFY_SCHEMA = {
+const TAXONOMY_SCHEMA = {
+  type: 'object',
+  properties: {
+    groups: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: { title: { type: 'string' }, category: { type: 'string', enum: CATEGORIES }, why: { type: 'string' } },
+        required: ['title', 'category', 'why'],
+        additionalProperties: false
+      }
+    }
+  },
+  required: ['groups'],
+  additionalProperties: false
+};
+
+const TAXONOMY_SYSTEM = `You organise a person's open browser tabs into a small set of task-level groups.
+You get their existing groups and every open tab (title, host, path). Propose the complete set of groups to use:
+- Reuse an existing group's exact title whenever tabs fit it. Add new groups only for tabs that fit none.
+- Aim for roughly one group per 4 to 8 tabs, between 2 and 10 groups in total. Every group should cover at least two tabs.
+- Titles are 1 to 4 words, Title Case, describing the task or topic ("Firefox Add-on Dev", "OpenRouter Keys", "Flights to Tokyo"), not a site name.
+- Merge near-duplicates into one group rather than splitting hairs. Do not create "Misc" or "Other".
+- "why" is at most 8 words.
+Return JSON only.`;
+
+const ASSIGN_SCHEMA = {
   type: 'object',
   properties: {
     assignments: {
       type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          id: { type: 'integer' },
-          group: { type: 'string' },
-          category: { type: 'string', enum: CATEGORIES },
-          reason: { type: 'string' }
-        },
-        required: ['id', 'group', 'category', 'reason'],
-        additionalProperties: false
-      }
+      items: { type: 'object', properties: { id: { type: 'integer' }, g: { type: 'integer' } }, required: ['id', 'g'], additionalProperties: false }
     }
   },
   required: ['assignments'],
   additionalProperties: false
 };
 
-const CLASSIFY_SYSTEM = `You are a tab steward organising a person's open browser tabs into a small number of named groups.
-Rules:
-- Prefer the existing groups when a tab clearly belongs; reuse their exact titles.
-- Otherwise invent a short, specific group title (1-3 words, Title Case) describing the task or topic, e.g. "Flights to Tokyo", "Rust Async", "House Hunting". Avoid vague titles like "Misc" or "Other" unless nothing fits.
-- Tabs about the same task belong together even if on different sites. Tabs on the same site but different tasks may be split.
-- Assign a category from the allowed list for each tab.
-- Give a reason of at most 10 words.
-Return JSON only.`;
+const ASSIGN_SYSTEM = `Assign each browser tab to the best-fitting group from the numbered list. Use the group number as "g". If a tab truly fits none, use -1, but prefer the closest group. Every tab id in the input must appear exactly once. Return JSON only.`;
 
 export async function getClassifyCache() {
   return getState('classifyCache', {});
+}
+
+async function proposeTaxonomy(existingGroups, tabs) {
+  const user = JSON.stringify({
+    existingGroups: existingGroups.map((g) => ({ title: g.title, category: g.category || null, sampleTitles: (g.sampleTitles || []).slice(0, 3) })),
+    tabs: tabs.map(({ id, title, host, path }) => ({ id, title: (title || '').slice(0, 80), host, path: (path || '').slice(0, 40) }))
+  });
+  const result = await runTask('taxonomy', { system: TAXONOMY_SYSTEM, user, schema: TAXONOMY_SCHEMA, maxTokens: 1024 });
+  const groups = Array.isArray(result.json?.groups) ? result.json.groups : [];
+  const out = [];
+  const seen = new Set();
+  for (const g of existingGroups) {
+    const t = (g.title || '').trim();
+    if (t && !seen.has(t.toLowerCase())) { seen.add(t.toLowerCase()); out.push({ title: t, category: g.category || 'Misc', why: 'existing group', existing: true }); }
+  }
+  for (const g of groups) {
+    const t = typeof g.title === 'string' ? g.title.trim().slice(0, 40) : '';
+    if (!t || /^(misc|other|miscellaneous)$/i.test(t) || seen.has(t.toLowerCase())) continue;
+    seen.add(t.toLowerCase());
+    out.push({ title: t, category: CATEGORIES.includes(g.category) ? g.category : 'Misc', why: String(g.why || '').slice(0, 60) });
+  }
+  return out;
 }
 
 export async function classifyWithModel(tabsForModel, existingGroups, { useCache = true } = {}) {
@@ -129,47 +163,44 @@ export async function classifyWithModel(tabsForModel, existingGroups, { useCache
       pending.push(t);
     }
   }
-  // Small batches keep each model call short: a 7B local model generating one huge answer gets cut
-  // off by the server, while ten tabs per call answer in a few seconds. Failures are per batch.
-  const BATCH = 10;
-  let fresh = [];
-  const byId = new Map(pending.map((t) => [t.id, t]));
-  const existing = existingGroups.map((g) => ({ title: g.title, category: g.category || null, sampleTitles: (g.sampleTitles || []).slice(0, 4) }));
-  let firstError = null;
-  for (let i = 0; i < pending.length; i += BATCH) {
-    const batch = pending.slice(i, i + BATCH);
-    const user = JSON.stringify({ existingGroups: existing, tabs: batch.map(({ id, title, host, path, excerpt }) => ({ id, title, host, path, ...(excerpt ? { excerpt } : {}) })) });
-    let parsed;
-    try {
-      const result = await runTask('classify', { system: CLASSIFY_SYSTEM, user, schema: CLASSIFY_SCHEMA, maxTokens: 2048 });
-      parsed = result.json;
-    } catch (e) {
-      firstError = firstError || e;
-      if (e instanceof SpendCapError || e instanceof NoProviderError) break;
-      continue;
-    }
-    if (!parsed || !Array.isArray(parsed.assignments)) continue;
-    const got = parsed.assignments
-      .map((a) => ({ ...a, id: Number(a.id) }))
-      .filter((a) => byId.has(a.id) && typeof a.group === 'string' && a.group.trim())
-      .map((a) => ({ id: a.id, group: a.group.trim().slice(0, 40), category: CATEGORIES.includes(a.category) ? a.category : 'Misc', reason: String(a.reason || '').slice(0, 80) }));
-    fresh.push(...got);
-    // New groups the model just invented become reusable for the next batch.
-    for (const a of got) if (!existing.some((g) => g.title === a.group)) existing.push({ title: a.group, category: a.category, sampleTitles: [byId.get(a.id).title] });
-  }
-  if (fresh.length) {
-    await updateState('classifyCache', {}, (c) => {
-      const next = { ...c };
-      for (const a of fresh) {
-        const t = byId.get(a.id);
-        const key = urlKey(t.url || '');
-        if (key) next[key] = { group: a.group, category: a.category, reason: a.reason, ts: now };
+  const fresh = [];
+  if (pending.length) {
+    const taxonomy = await proposeTaxonomy(existingGroups, pending);
+    if (!taxonomy.length) throw new Error('Model proposed no groups');
+    const byId = new Map(pending.map((t) => [t.id, t]));
+    const groupList = taxonomy.map((g, i) => ({ n: i, title: g.title, why: g.why }));
+    const BATCH = 15;
+    let firstError = null;
+    for (let i = 0; i < pending.length; i += BATCH) {
+      const batch = pending.slice(i, i + BATCH);
+      const user = JSON.stringify({ groups: groupList, tabs: batch.map(({ id, title, host, path, excerpt }) => ({ id, title: (title || '').slice(0, 80), host, path: (path || '').slice(0, 40), ...(excerpt ? { excerpt } : {}) })) });
+      try {
+        const result = await runTask('assign', { system: ASSIGN_SYSTEM, user, schema: ASSIGN_SCHEMA, maxTokens: 1024 });
+        for (const a of Array.isArray(result.json?.assignments) ? result.json.assignments : []) {
+          const id = Number(a.id);
+          const g = taxonomy[Number(a.g)];
+          if (!byId.has(id) || !g) continue;
+          if (fresh.some((f) => f.id === id)) continue;
+          fresh.push({ id, group: g.title, category: g.category, reason: g.why || 'model', byModel: true });
+        }
+      } catch (e) {
+        firstError = firstError || e;
+        if (e instanceof SpendCapError || e instanceof NoProviderError) break;
       }
-      for (const [k, v] of Object.entries(next)) if (now - v.ts > CLASSIFY_CACHE_TTL) delete next[k];
-      return next;
-    });
+    }
+    if (!fresh.length && firstError) throw firstError;
+    if (fresh.length) {
+      await updateState('classifyCache', {}, (c) => {
+        const next = { ...c };
+        for (const a of fresh) {
+          const key = urlKey(byId.get(a.id).url || '');
+          if (key) next[key] = { group: a.group, category: a.category, reason: a.reason, ts: now };
+        }
+        for (const [k, v] of Object.entries(next)) if (now - v.ts > CLASSIFY_CACHE_TTL) delete next[k];
+        return next;
+      });
+    }
   }
-  if (!fresh.length && firstError) throw firstError;
   return [...cached, ...fresh];
 }
 
