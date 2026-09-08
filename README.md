@@ -6,6 +6,10 @@ It thinks with whatever model you bring: a local one (Ollama, LM Studio, any Ope
 
 Requires Firefox 139 or newer (native tab groups API).
 
+## Where it lives
+
+One panel, three homes: the toolbar popup (Alt+Shift+S) for quick hits, the sidebar (Alt+Shift+P) as the persistent home with drag and drop, and a full page. The panel has five views: Home (digest, suggestions, hidden groups), Groups (every group with its tabs, drag tabs between groups or onto "new group", drag groups to reorder, click the swatch for colour, click the title to rename), Attic, Projects and Activity. Hover any tab for why it is where it is: category, idle time, when it will close, and which rule protects it.
+
 ## What it does
 
 - **Preview** shows exactly what Tidy would do, with the reason and the autonomy gate for each action, without doing it.
@@ -66,7 +70,7 @@ Add `--ollama` to also exercise a local model (expects Ollama on localhost:11434
 - `src/lib/providers.js` OpenAI-compatible and Anthropic adapters, model discovery, cost table.
 - `src/lib/llm.js` prompts and schemas, spend cap, send log, classification cache.
 - `src/lib/groups.js`, `tabmeta.js` native tab group helpers and stable group keys stored on tabs.
-- `src/popup/` the steward panel (popup, sidebar, or full page). `src/options/` settings. `src/attic/` Attic and activity log.
+- `src/panel/` the steward panel (popup, sidebar, or full page). `src/options/` settings. `src/attic/` a standalone Attic page.
 - `src/content/formguard.js` optional content script: unsaved-input detection and page excerpts.
 - `test/` vitest; `test/fakeBrowser.js` is an in-memory WebExtension API used by the end-to-end steward tests.
 

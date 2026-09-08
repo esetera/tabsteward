@@ -110,7 +110,7 @@ browser.commands.onCommand.addListener(async (command) => {
 });
 
 browser.notifications.onClicked.addListener(async () => {
-  await browser.tabs.create({ url: browser.runtime.getURL('src/popup/popup.html?page=1') });
+  await browser.tabs.create({ url: browser.runtime.getURL('src/panel/panel.html?mode=page') });
 });
 
 browser.permissions.onAdded.addListener(ensureContentScript);
@@ -149,6 +149,9 @@ const handlers = {
   createGroup: (m) => steward.createGroupFromTabs(m.tabIds, m.title, m.windowId),
   'tabs:activate': async (m) => { const t = await browser.tabs.update(m.tabId, { active: true }); await browser.windows.update(t.windowId, { focused: true }); return true; },
   'tabs:close': (m) => steward.closeTabs(m.tabIds, m.reason),
+  'tabs:ungroup': (m) => steward.ungroupTabs(m.tabIds),
+  'tabs:moveToGroup': (m) => steward.moveTabsToGroup(m.tabIds, m.groupId),
+  'group:reorder': (m) => steward.reorderGroup(m.groupId, m.beforeGroupId),
   'tabs:sleep': (m) => steward.sleepTabs(m.tabIds),
   ask: (m) => steward.ask(m.query),
   command: (m) => steward.command(m.text, { execute: m.execute !== false }),

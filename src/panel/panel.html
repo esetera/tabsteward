@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Tab Steward</title>
+  <link rel="stylesheet" href="../ui.css">
+</head>
+<body>
+  <div class="header">
+    <div class="row">
+      <h1 class="grow">Tab Steward</h1>
+      <span id="provider" class="chip" title="Model provider"></span>
+      <button id="tidy" class="primary small" title="Run the whole policy (Alt+Shift+T)">Tidy now</button>
+      <button id="undo" class="small" title="Undo the last steward action (Alt+Shift+Z)">Undo</button>
+      <div class="menu" id="more">
+        <button class="icon" id="more-btn" title="More">⋯</button>
+        <div class="menu-list">
+          <button data-open="preview">Preview what Tidy would do</button>
+          <button data-open="rethink">Rethink all groups (model)</button>
+          <button data-open="options">Settings & policy</button>
+          <button data-open="sidebar">Open in sidebar (Alt+Shift+P)</button>
+          <button data-open="page">Open as a full page</button>
+        </div>
+      </div>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <input id="ask" type="text" class="grow" placeholder="Find open or closed tabs, or tell the steward what to do" autocomplete="off">
+      <button id="ask-btn" class="small" title="Send this instruction to the steward (Enter)">Go</button>
+    </div>
+    <div class="quick" id="quick">
+      <button data-quick="cleanup" title="Close leftovers and duplicates, then group what is ungrouped (Alt+Shift+C)">Clean up</button>
+      <button data-quick="dedupe" title="Close duplicate tabs only">Dedupe</button>
+      <button data-quick="group" title="Group ungrouped tabs only">Group</button>
+      <button data-quick="sleepAll" title="Unload every tab except the active, pinned and playing ones">Sleep all</button>
+      <button data-quick="minimise" title="Collapse every group and sleep idle tabs (Alt+Shift+M)">Minimise</button>
+      <button data-quick="expandAll" title="Expand every group">Expand all</button>
+      <button data-quick="closeStale" title="Close every tab past its staleness threshold (to the Attic)">Close stale</button>
+    </div>
+    <nav class="nav" id="nav">
+      <button data-view="home">Home</button>
+      <button data-view="groups">Groups</button>
+      <button data-view="attic">Attic</button>
+      <button data-view="projects">Projects</button>
+      <button data-view="log">Activity</button>
+    </nav>
+  </div>
+  <div id="answer" class="section" hidden></div>
+  <div id="plan" class="section" hidden></div>
+  <main id="view" class="section"></main>
+  <div id="footer" class="section muted" style="padding:8px 12px 12px"></div>
+  <script type="module" src="panel.js"></script>
+</body>
+</html>

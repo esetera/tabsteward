@@ -12,6 +12,8 @@ const ROOT = path.resolve(new URL('..', import.meta.url).pathname);
 const visible = process.argv.includes('--visible');
 const withOllama = process.argv.includes('--ollama');
 const quick = process.argv.includes('--quick');
+const shot = process.argv.includes('--shot');
+const SHOT_DIR = process.env.SCRATCH || tmpdir();
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3.1:8b';
 const step = (name) => console.log('   … ' + name);
 const profile = mkdtempSync(path.join(process.env.SCRATCH || tmpdir(), 'tabsteward-prof-'));
@@ -77,7 +79,7 @@ try {
   // Drive the steward from its own page (content context, extension principal): every message the UI uses.
   await m.exec(`
     const win = Services.wm.getMostRecentWindow("navigator:browser");
-    const tab = win.gBrowser.addTab(${JSON.stringify(base + 'src/popup/popup.html?page=1')}, { triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal() });
+    const tab = win.gBrowser.addTab(${JSON.stringify(base + 'src/panel/panel.html?mode=page')}, { triggeringPrincipal: Services.scriptSecurityManager.getSystemPrincipal() });
     win.gBrowser.selectedTab = tab;
   `);
   await new Promise((r) => setTimeout(r, 2500));
@@ -87,7 +89,7 @@ try {
   for (const hnd of handles) {
     await m.send('WebDriver:SwitchToWindow', { handle: hnd });
     const url = await m.send('WebDriver:GetCurrentURL');
-    if (String(url.value).startsWith(base + 'src/popup')) { found = true; break; }
+    if (String(url.value).startsWith(base + 'src/panel')) { found = true; break; }
   }
   check(found, 'switched to the steward page');
 
@@ -150,6 +152,18 @@ try {
     check(mv.ok, 'move group to new window', mv.error);
     const gathered = await call('gather', { title: 'Renamed' });
     check(gathered.ok, 'gather groups', gathered.error);
+  }
+  const g1 = (await call('overview')).result.groups;
+  if (g1.length >= 2) {
+    const ro = await call('group:reorder', { groupId: g1[0].id, beforeGroupId: g1[1].id });
+    check(ro.ok, 'drag: reorder groups', ro.error);
+  }
+  const ug = (await call('overview')).result.tabs.find((t) => t.groupId === -1 && !t.pinned && /^https?:/.test(t.url));
+  if (ug && g1.length) {
+    const mv = await call('tabs:moveToGroup', { tabIds: [ug.id], groupId: g1[0].id });
+    check(mv.ok, 'drag: tab into group', mv.error);
+    const out = await call('tabs:ungroup', { tabIds: [ug.id] });
+    check(out.ok, 'drag: tab out of group', out.error);
   }
   const qm = await call('quick', { kind: 'minimise' });
   check(qm.ok && qm.result.executed >= 1, 'quick: minimise', qm.ok ? `${qm.result.executed} actions` : qm.error);
@@ -229,6 +243,20 @@ try {
     if (c3.ok && c3.result.steps.length) { const run = await call('command:run', { steps: c3.result.steps, text: 'close the airbnb tab' }); check(run.ok && run.result.results.every((x) => x.ok), 'command: run approved plan', run.ok ? '' : run.error); }
     const pol = await call('policy:compile', { text: 'Never close anything on rust-lang.org. Travel tabs die after 2 days. Keep developer.mozilla.org under Docs.' });
     check(pol.ok && pol.result.rules.length >= 2, 'policy compiled by the local model', pol.ok ? `${pol.result.rules.length} rules via ${pol.result.via}` : pol.error);
+  }
+
+  if (shot) {
+    const { writeFileSync: wf } = await import('node:fs');
+    for (const [name, url, w, hgt] of [['popup', base + 'src/panel/panel.html?mode=popup', 470, 640], ['sidebar', base + 'src/panel/panel.html?mode=sidebar', 380, 820]]) {
+      await m.send('WebDriver:SetWindowRect', { width: w, height: hgt });
+      await m.send('WebDriver:Navigate', { url });
+      await new Promise((r) => setTimeout(r, 1800));
+      if (name === 'sidebar') { await m.exec(`document.querySelector('#nav [data-view="groups"]').click();`); await new Promise((r) => setTimeout(r, 1200)); await m.exec(`document.querySelectorAll('.twisty').forEach(t => t.click());`); await new Promise((r) => setTimeout(r, 800)); }
+      const png = await m.send('WebDriver:TakeScreenshot', { full: true });
+      const file = path.join(SHOT_DIR, `panel-${name}.png`);
+      wf(file, Buffer.from(png.value, 'base64'));
+      console.log('SHOT  ' + file);
+    }
   }
 
   // Options and Attic pages load without script errors.

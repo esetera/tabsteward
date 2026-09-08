@@ -86,3 +86,29 @@ details summary { cursor: pointer; color: var(--muted); }
 .answer { white-space: pre-wrap; }
 .quick { display: flex; flex-wrap: wrap; gap: 4px; padding-top: 8px; }
 .quick button { font-size: 12px; padding: 3px 8px; border-radius: 12px; }
+
+/* ---- panel (popup, sidebar, page) ---- */
+body.mode-popup { width: 440px; min-height: 480px; max-height: 600px; overflow-y: auto; }
+body.mode-sidebar { width: auto; min-width: 280px; }
+body.mode-page { max-width: 1100px; margin: 0 auto; }
+body.mode-page .header { border-radius: 0 0 10px 10px; }
+.nav { display: flex; gap: 2px; margin-top: 8px; border-bottom: 1px solid var(--line); }
+.nav button { border: none; background: transparent; border-radius: 6px 6px 0 0; padding: 5px 10px; color: var(--muted); }
+.nav button.active { color: var(--text); font-weight: 600; box-shadow: inset 0 -2px 0 var(--accent); }
+.nav .count { font-size: 10px; margin-left: 3px; color: var(--muted); }
+.group-block { border: 1px solid var(--line); border-radius: 8px; margin: 6px 0; background: var(--panel); }
+.group-block .group-row { border-radius: 8px 8px 0 0; }
+.group-block.collapsed-list .group-tabs { display: none; }
+.group-tabs { padding: 2px 6px 6px 22px; }
+.group-block.drop, .dropzone.drop, .ungrouped-zone.drop { outline: 2px dashed var(--accent); outline-offset: -2px; background: var(--chip); }
+.dropzone { border: 1px dashed var(--line); border-radius: 8px; padding: 8px; text-align: center; color: var(--muted); margin: 6px 0; }
+.tab[draggable="true"] { cursor: grab; }
+.tab.dragging { opacity: .4; }
+.swatch { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--panel); box-shadow: 0 0 0 1px var(--line); cursor: pointer; flex: none; }
+.palette { position: absolute; z-index: 6; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px; display: grid; grid-template-columns: repeat(5, 18px); gap: 6px; box-shadow: 0 4px 16px rgba(0,0,0,.15); }
+.palette .swatch { width: 16px; height: 16px; }
+.twisty { font-size: 11px; width: 14px; text-align: center; color: var(--muted); cursor: pointer; }
+.toolbar { display: flex; gap: 6px; align-items: center; margin: 8px 0; }
+.log-row { display: grid; grid-template-columns: 62px 1fr auto; gap: 8px; padding: 6px 4px; border-bottom: 1px solid var(--line); align-items: start; }
+.log-row .when { color: var(--muted); font-size: 11px; }
+.why { font-size: 11px; color: var(--muted); }

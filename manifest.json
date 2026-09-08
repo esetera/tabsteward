@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Tab Steward",
-  "version": "0.1.4",
+  "version": "0.2.0",
   "description": "An AI tab steward for Firefox: groups, dedupes, sleeps and closes tabs under a policy you write in plain language. Every action is explained and reversible. Bring your own LLM key.",
   "browser_specific_settings": {
     "gecko": {
@@ -55,12 +55,12 @@
   },
   "action": {
     "default_title": "Tab Steward",
-    "default_popup": "src/popup/popup.html",
+    "default_popup": "src/panel/panel.html?mode=popup",
     "default_icon": "icons/icon.svg"
   },
   "sidebar_action": {
     "default_title": "Tab Steward",
-    "default_panel": "src/popup/popup.html?sidebar=1",
+    "default_panel": "src/panel/panel.html?mode=sidebar",
     "default_icon": "icons/icon.svg",
     "open_at_install": false
   },
@@ -100,6 +100,9 @@
       "description": "Open Tab Steward"
     },
     "_execute_sidebar_action": {
+      "suggested_key": {
+        "default": "Alt+Shift+P"
+      },
       "description": "Toggle the Tab Steward sidebar"
     }
   }

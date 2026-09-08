@@ -2,7 +2,7 @@
 // or queues suggestions, and exposes every feature the UI calls.
 import { getSettings, saveSettings, getState, setState, updateState, getSession, setSession, updateSession, uid } from './store.js';
 import { classifyHeuristic, colorFor } from './categories.js';
-import { effectivePolicy, validateRules, parsePolicyFallback } from './rules.js';
+import { effectivePolicy, validateRules, parsePolicyFallback, describeRule } from './rules.js';
 import { stalenessDecision, hoursIdle, staleThresholdHours } from './staleness.js';
 import { findDuplicates } from './dedupe.js';
 import { isEphemeral, isBlankTab, isInternalUrl, hostOf } from './urls.js';
@@ -801,7 +801,8 @@ export async function overview() {
     atticCount: attic.length,
     lastTidy: await getState('lastTidy', null),
     focus, spend, provider, streakNudges,
-    autonomy: settings.autonomy, monthlyCapUsd: settings.monthlyCapUsd, onboarded: settings.onboarded
+    autonomy: settings.autonomy, monthlyCapUsd: settings.monthlyCapUsd, onboarded: settings.onboarded,
+    rules: Object.fromEntries((settings.rules || []).map((r) => [r.id, describeRule(r)]))
   };
 }
 
@@ -817,6 +818,27 @@ export async function undoLast() {
 
 export async function closeTabs(tabIds, reason = 'you closed it') {
   return execute({ type: 'close', tabIds, force: true, reason, trigger: 'user' });
+}
+
+export async function ungroupTabs(tabIds) {
+  return execute({ type: 'ungroup', tabIds, reason: 'you dragged it out', trigger: 'user' });
+}
+
+export async function moveTabsToGroup(tabIds, groupId) {
+  const g = await browser.tabGroups.get(groupId);
+  const ids = await tabsInWindow(tabIds, g.windowId);
+  if (!ids.length) return null;
+  return execute({ type: 'group', windowId: g.windowId, title: g.title, tabIds: ids, reason: 'you dragged it here', trigger: 'user' });
+}
+
+// Place a group just before another group in the tab strip (same window; cross-window moves the group first).
+export async function reorderGroup(groupId, beforeGroupId) {
+  const target = await browser.tabGroups.get(beforeGroupId);
+  const targetTabs = await browser.tabs.query({ groupId: beforeGroupId });
+  const index = Math.min(...targetTabs.map((t) => t.index));
+  await browser.tabGroups.move(groupId, { windowId: target.windowId, index });
+  await addLog({ type: 'reorder', reason: 'you reordered the groups', tabs: [], groupId });
+  return true;
 }
 
 export async function sleepTabs(tabIds) {
