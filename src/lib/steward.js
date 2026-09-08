@@ -10,7 +10,7 @@ import { isNeverSend, tabForModel } from './privacy.js';
 import { listGroups, ensureGroup, touchGroup, findGroupByTitle, keyForGroup } from './groups.js';
 import { metaForTabs, setTabMeta, getTabMeta } from './tabmeta.js';
 import { execute, undoBatch, lastUndoableBatch, addLog, sendToAttic } from './actions.js';
-import { classifyWithModel, compilePolicyWithModel, askWithModel, draftNoteWithModel, nameGroupWithModel, providerStatus, getSpend, sendPolicy, NoProviderError, SpendCapError } from './llm.js';
+import { classifyWithModel, compilePolicyWithModel, askWithModel, draftNoteWithModel, nameGroupWithModel, commandWithModel, COMMAND_OPS, providerStatus, getSpend, sendPolicy, NoProviderError, SpendCapError } from './llm.js';
 
 const SNOOZE_MS = 24 * 3600000;
 const SUGGESTION_MAX = 60;
@@ -539,6 +539,146 @@ export async function ask(query) {
   for (const id of tabIds) { const t = tabs.find((x) => x.id === id); described.push({ id, title: t.title || t.url, url: t.url, favIconUrl: t.favIconUrl || '', windowId: t.windowId }); }
   const answer = typeof r.answer === 'string' && r.answer ? r.answer : described.length ? `${described.length} matching tab${described.length === 1 ? '' : 's'}` : 'No matching tabs';
   return { intent: r.intent, answer, groupTitle: typeof r.groupTitle === 'string' ? r.groupTitle : '', tabs: described };
+}
+
+// ---------- commands: "merge the two Firefox groups", "add the OpenRouter tabs to Dev" ----------
+
+const DESTRUCTIVE = new Set(['closeTabs', 'closeGroup', 'hide']);
+
+function stepText(step, groupsById, tabsById) {
+  const g = (id) => `“${(groupsById.get(id) || {}).title || 'group ' + id}”`;
+  const n = (ids) => `${ids.length} tab${ids.length === 1 ? '' : 's'}`;
+  switch (step.op) {
+    case 'createGroup': return `Create group “${step.title}” with ${n(step.tabIds)}`;
+    case 'addToGroup': return `Add ${n(step.tabIds)} to ${g(step.groupId)}`;
+    case 'renameGroup': return `Rename ${g(step.groupId)} to “${step.title}”`;
+    case 'mergeGroups': return `Merge ${step.groupIds.map(g).join(' + ')}${step.title ? ` as “${step.title}”` : ''}`;
+    case 'ungroup': return step.groupId ? `Ungroup ${g(step.groupId)}` : `Ungroup ${n(step.tabIds)}`;
+    case 'closeTabs': return `Close ${n(step.tabIds)} (to the Attic)`;
+    case 'closeGroup': return `Close ${g(step.groupId)} (to the Attic)`;
+    case 'collapse': return `Collapse ${g(step.groupId)}`;
+    case 'expand': return `Expand ${g(step.groupId)}`;
+    case 'hide': return `Hide ${g(step.groupId)}`;
+    case 'sleep': return `Put ${n(step.tabIds)} to sleep`;
+    case 'moveToNewWindow': return `Move ${g(step.groupId)} to a new window`;
+    case 'find': return `Found ${n(step.tabIds)}`;
+    case 'answer': return step.text || '';
+    default: return step.op;
+  }
+}
+
+async function commandContext() {
+  const settings = await getSettings();
+  const tabs = (await browser.tabs.query({})).filter((t) => !isInternalUrl(t.url));
+  const groups = await listGroups();
+  const sp = await sendPolicy();
+  const forModel = tabs.filter((t) => !isNeverSend(t, sp.neverSend, localClassify(t, settings.rules).policy, { local: sp.local })).map((t) => ({ ...tabForModel(t), groupId: t.groupId === -1 ? null : t.groupId }));
+  return { settings, tabs, groups, forModel };
+}
+
+function validatePlan(raw, groups, tabs) {
+  const groupIds = new Set(groups.map((g) => g.id));
+  const tabIds = new Set(tabs.map((t) => t.id));
+  const steps = [];
+  for (const s of Array.isArray(raw?.steps) ? raw.steps : []) {
+    if (!COMMAND_OPS.includes(s.op)) continue;
+    const step = {
+      op: s.op,
+      title: typeof s.title === 'string' ? s.title.trim().slice(0, 40) : '',
+      groupId: groupIds.has(Number(s.groupId)) ? Number(s.groupId) : null,
+      groupIds: (Array.isArray(s.groupIds) ? s.groupIds : []).map(Number).filter((id) => groupIds.has(id)),
+      tabIds: [...new Set((Array.isArray(s.tabIds) ? s.tabIds : []).map(Number).filter((id) => tabIds.has(id)))],
+      text: typeof s.text === 'string' ? s.text.slice(0, 400) : ''
+    };
+    if (step.op === 'ungroup' && step.groupId) step.tabIds = [...new Set([...step.tabIds, ...tabs.filter((t) => t.groupId === step.groupId).map((t) => t.id)])];
+    const needsTabs = ['createGroup', 'addToGroup', 'ungroup', 'closeTabs', 'sleep', 'find'].includes(step.op);
+    const needsGroup = ['addToGroup', 'renameGroup', 'closeGroup', 'collapse', 'expand', 'hide', 'moveToNewWindow'].includes(step.op);
+    if (needsTabs && !step.tabIds.length) continue;
+    if (needsGroup && step.groupId === null) continue;
+    if (step.op === 'mergeGroups' && step.groupIds.length < 2) continue;
+    if ((step.op === 'createGroup' || step.op === 'renameGroup') && !step.title) continue;
+    if (step.op === 'answer' && !step.text) continue;
+    steps.push(step);
+  }
+  return steps;
+}
+
+export async function command(text, { execute: run = true } = {}) {
+  const { groups, tabs, forModel } = await commandContext();
+  const raw = await commandWithModel(text, groups.map((g) => ({ id: g.id, title: g.title || 'Untitled', count: g.tabs.length })), forModel);
+  const steps = validatePlan(raw, groups, tabs);
+  const groupsById = new Map(groups.map((g) => [g.id, g]));
+  const tabsById = new Map(tabs.map((t) => [t.id, t]));
+  const plan = {
+    summary: typeof raw?.summary === 'string' ? raw.summary : '',
+    steps: steps.map((s) => ({ ...s, text: s.op === 'answer' ? s.text : stepText(s, groupsById, tabsById) })),
+    destructive: steps.some((s) => DESTRUCTIVE.has(s.op)),
+    tabs: [...new Set(steps.flatMap((s) => s.tabIds))].map((id) => tabsById.get(id)).filter(Boolean).map((t) => ({ id: t.id, title: t.title || t.url, url: t.url, favIconUrl: t.favIconUrl || '', windowId: t.windowId }))
+  };
+  if (!steps.length) plan.summary = plan.summary || 'I could not map that to an action.';
+  if (run && steps.length && !plan.destructive) return { ...plan, ...(await runPlan(steps, text)) };
+  return plan;
+}
+
+export async function runPlan(steps, text = '') {
+  const batchId = uid('batch');
+  const results = [];
+  for (const step of steps) {
+    try {
+      const ok = await runStep(step, batchId, text);
+      results.push({ ok: ok !== false, text: step.text || step.op });
+    } catch (e) {
+      results.push({ ok: false, text: `${step.text || step.op}: ${String(e.message || e)}` });
+    }
+  }
+  return { ran: true, batchId, results };
+}
+
+async function tabsInWindow(tabIds, windowId) {
+  const alive = [];
+  for (const id of tabIds) { try { alive.push(await browser.tabs.get(id)); } catch { /* gone */ } }
+  const elsewhere = alive.filter((t) => t.windowId !== windowId && !t.pinned).map((t) => t.id);
+  if (elsewhere.length) await browser.tabs.move(elsewhere, { windowId, index: -1 });
+  return alive.filter((t) => !t.pinned).map((t) => t.id);
+}
+
+async function runStep(step, batchId, text) {
+  const reason = `you asked: “${text.slice(0, 60)}”`;
+  switch (step.op) {
+    case 'createGroup': {
+      const first = await browser.tabs.get(step.tabIds[0]);
+      const ids = await tabsInWindow(step.tabIds, first.windowId);
+      return execute({ type: 'group', windowId: first.windowId, title: step.title, tabIds: ids, reason, batchId, trigger: 'command' });
+    }
+    case 'addToGroup': {
+      const g = await browser.tabGroups.get(step.groupId);
+      const ids = await tabsInWindow(step.tabIds, g.windowId);
+      return execute({ type: 'group', windowId: g.windowId, title: g.title, tabIds: ids, reason, batchId, trigger: 'command' });
+    }
+    case 'renameGroup': return execute({ type: 'rename', groupId: step.groupId, title: step.title, reason, batchId, trigger: 'command' });
+    case 'mergeGroups': {
+      const infos = [];
+      for (const id of step.groupIds) { const g = await browser.tabGroups.get(id); const tabs = await browser.tabs.query({ groupId: id }); infos.push({ g, tabs }); }
+      infos.sort((a, b) => b.tabs.length - a.tabs.length);
+      const target = infos[0];
+      for (const other of infos.slice(1)) {
+        const ids = await tabsInWindow(other.tabs.map((t) => t.id), target.g.windowId);
+        if (ids.length) await execute({ type: 'group', windowId: target.g.windowId, title: target.g.title, tabIds: ids, reason, batchId, trigger: 'command' });
+      }
+      if (step.title && step.title !== target.g.title) await execute({ type: 'rename', groupId: target.g.id, title: step.title, reason, batchId, trigger: 'command' });
+      return true;
+    }
+    case 'ungroup': return execute({ type: 'ungroup', tabIds: step.tabIds, reason, batchId, trigger: 'command' });
+    case 'closeTabs': return execute({ type: 'close', tabIds: step.tabIds, force: true, reason, batchId, trigger: 'command' });
+    case 'closeGroup': { const tabs = await browser.tabs.query({ groupId: step.groupId }); return execute({ type: 'close', tabIds: tabs.map((t) => t.id), force: true, reason, batchId, trigger: 'command' }); }
+    case 'collapse': return execute({ type: 'collapse', groupId: step.groupId, reason, batchId, trigger: 'command' });
+    case 'expand': return execute({ type: 'expand', groupId: step.groupId, reason, batchId, trigger: 'command' });
+    case 'hide': return execute({ type: 'hide', groupId: step.groupId, reason, batchId, trigger: 'command' });
+    case 'sleep': return execute({ type: 'sleep', tabIds: step.tabIds, reason, batchId, trigger: 'command' });
+    case 'moveToNewWindow': return execute({ type: 'moveGroupToWindow', groupId: step.groupId, reason, batchId, trigger: 'command' });
+    case 'find': case 'answer': return true;
+    default: return false;
+  }
 }
 
 // ---------- notes ----------

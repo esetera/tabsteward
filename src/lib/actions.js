@@ -236,9 +236,15 @@ export async function undoBatch(batchId) {
       if (e.undo.atticIds) {
         for (const id of e.undo.atticIds) if (await restoreAttic(id)) count += 1;
       } else if (e.type === 'group' && e.undo.previous) {
-        const ids = e.undo.previous.filter((p) => p.groupId === -1).map((p) => p.id);
-        const alive = (await tabsById(ids)).filter((t) => t.groupId === e.undo.groupId).map((t) => t.id);
-        if (alive.length) { await browser.tabs.ungroup(alive); count += alive.length; }
+        const moved = (await tabsById(e.undo.previous.map((p) => p.id))).filter((t) => t.groupId === e.undo.groupId);
+        const byPrev = new Map();
+        for (const t of moved) { const prev = e.undo.previous.find((p) => p.id === t.id).groupId; if (!byPrev.has(prev)) byPrev.set(prev, []); byPrev.get(prev).push(t.id); }
+        for (const [prev, ids] of byPrev) {
+          let back = false;
+          if (prev !== -1) { try { await browser.tabGroups.get(prev); await browser.tabs.group({ tabIds: ids, groupId: prev }); back = true; } catch { back = false; } }
+          if (!back) await browser.tabs.ungroup(ids);
+          count += ids.length;
+        }
       } else if (e.type === 'rename') {
         await browser.tabGroups.update(e.undo.groupId, { title: e.undo.title, color: e.undo.color }); count += 1;
       } else if (e.type === 'collapse') {

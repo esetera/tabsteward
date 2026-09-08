@@ -208,6 +208,19 @@ try {
     if (g0) { const nm = await call('groupAction', { kind: 'autoName', groupId: g0.id }); check(nm.ok, 'model names a group', nm.ok ? nm.result.title : nm.error); }
     const anyTab = ov2.result.tabs.find((t) => /rust|mozilla/.test(t.url));
     if (anyTab) { const dn = await call('note:draft', { tabId: anyTab.id }); check(dn.ok && dn.result.length > 3, 'model drafts a tab note', dn.ok ? dn.result : dn.error); }
+    const before = (await call('overview')).result.groups;
+    const target = before.find((g) => g.count >= 2) || before[0];
+    if (target) {
+      const c1 = await call('command', { text: `rename the group "${target.title}" to Renamed By Command` });
+      check(c1.ok && c1.result.ran && c1.result.results.every((x) => x.ok), 'command: rename group', c1.ok ? JSON.stringify(c1.result.results) : c1.error);
+      const g2 = (await call('overview')).result.groups.map((g) => g.title);
+      check(g2.includes('Renamed By Command'), 'command result visible', g2.join(', '));
+    }
+    const c2 = await call('command', { text: 'make a new group called Rust Study with the rust-lang tabs' });
+    check(c2.ok && c2.result.ran && (await call('overview')).result.groups.some((g) => /rust study/i.test(g.title)), 'command: create group with tabs', c2.ok ? c2.result.summary : c2.error);
+    const c3 = await call('command', { text: 'close the airbnb tab' });
+    check(c3.ok && !c3.result.ran && c3.result.destructive && c3.result.steps.length === 1, 'command: destructive plan waits for OK', c3.ok ? c3.result.steps.map((x) => x.text).join('; ') : c3.error);
+    if (c3.ok && c3.result.steps.length) { const run = await call('command:run', { steps: c3.result.steps, text: 'close the airbnb tab' }); check(run.ok && run.result.results.every((x) => x.ok), 'command: run approved plan', run.ok ? '' : run.error); }
     const pol = await call('policy:compile', { text: 'Never close anything on rust-lang.org. Travel tabs die after 2 days. Keep developer.mozilla.org under Docs.' });
     check(pol.ok && pol.result.rules.length >= 2, 'policy compiled by the local model', pol.ok ? `${pol.result.rules.length} rules via ${pol.result.via}` : pol.error);
   }

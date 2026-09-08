@@ -148,6 +148,8 @@ const handlers = {
   'tabs:close': (m) => steward.closeTabs(m.tabIds, m.reason),
   'tabs:sleep': (m) => steward.sleepTabs(m.tabIds),
   ask: (m) => steward.ask(m.query),
+  command: (m) => steward.command(m.text, { execute: m.execute !== false }),
+  'command:run': (m) => steward.runPlan(m.steps, m.text || ''),
   'attic:list': () => getState('attic', []),
   'attic:restore': (m) => restoreAttic(m.id, { activate: !!m.activate }),
   'attic:restoreBatch': async (m) => { let n = 0; for (const id of m.ids) if (await restoreAttic(id)) n += 1; return n; },

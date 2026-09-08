@@ -338,26 +338,33 @@ async function askModel() {
   if (!q) return;
   const el = $('answer');
   el.hidden = false;
-  clear(el).appendChild(h('div', { class: 'banner' }, 'Asking the model…'));
+  clear(el).appendChild(h('div', { class: 'banner' }, 'Working out what to do…'));
   try {
-    const r = await send('ask', { query: q });
-    clear(el);
-    const card = h('div', { class: 'banner' });
-    card.appendChild(h('div', { class: 'row' }, h('span', { class: 'badge' }, r.intent), h('span', { class: 'grow answer' }, r.answer || '')));
-    for (const t of r.tabs.slice(0, 12)) card.appendChild(h('div', { class: 'tab', onClick: () => jump(t.id) }, favicon(t.favIconUrl), h('span', { class: 'title' }, t.title)));
-    const ids = r.tabs.map((t) => t.id);
-    const actions = h('div', { class: 'row', style: { marginTop: '6px' } });
-    if (ids.length) {
-      if (r.intent === 'close') actions.appendChild(h('button', { class: 'small danger', onClick: async () => { await send('tabs:close', { tabIds: ids, reason: `you asked: “${q}”` }); el.hidden = true; refresh(); } }, `Close ${ids.length}`));
-      if (r.intent === 'group' || ids.length > 1) actions.appendChild(h('button', { class: 'small', onClick: async () => { const title = prompt('Group title', r.groupTitle || q); if (!title) return; const byWin = new Map(); for (const t of r.tabs) { if (!byWin.has(t.windowId)) byWin.set(t.windowId, []); byWin.get(t.windowId).push(t.id); } for (const [w, tids] of byWin) await send('createGroup', { tabIds: tids, title, windowId: w }); el.hidden = true; refresh(); } }, `Group ${ids.length}`));
-      if (r.intent === 'find' && ids.length === 1) actions.appendChild(h('button', { class: 'small primary', onClick: () => jump(ids[0]) }, 'Jump'));
-    }
-    actions.appendChild(h('button', { class: 'small', onClick: () => { el.hidden = true; } }, 'Close'));
-    card.appendChild(actions);
-    el.appendChild(card);
+    const r = await send('command', { text: q });
+    renderPlan(r, q);
+    if (r.ran) refresh();
   } catch (e) {
-    clear(el).appendChild(h('div', { class: 'banner' }, e.kind === 'NoProviderError' ? 'Add a model key in settings to ask questions. Local search still works as you type.' : 'Model error: ' + e.message));
+    clear(el).appendChild(h('div', { class: 'banner' }, e.kind === 'NoProviderError' ? 'Add a model in settings to give instructions. Local search still works as you type.' : 'Model error: ' + e.message));
   }
+}
+
+function renderPlan(r, q) {
+  const el = clear($('answer'));
+  const card = h('div', { class: 'banner' });
+  card.appendChild(h('div', { class: 'row' }, h('b', { class: 'grow' }, r.ran ? 'Done' : r.steps.length ? (r.destructive ? 'Plan (needs your OK)' : 'Plan') : 'No action'), h('button', { class: 'small', onClick: () => { el.hidden = true; } }, 'Close')));
+  if (r.summary) card.appendChild(h('div', { class: 'answer muted' }, r.summary));
+  const rows = r.ran ? r.results : r.steps;
+  for (const s of rows) card.appendChild(h('div', { class: 'tab' }, h('span', { class: 'badge' + (r.ran ? (s.ok ? ' ok' : ' close') : '') }, r.ran ? (s.ok ? 'ok' : 'failed') : 'step'), h('span', { class: 'title', style: { whiteSpace: 'normal' } }, s.text)));
+  const findOnly = r.steps.every((s) => s.op === 'find' || s.op === 'answer');
+  if (findOnly || !r.ran) for (const t of r.tabs.slice(0, 12)) card.appendChild(h('div', { class: 'tab', onClick: () => jump(t.id) }, favicon(t.favIconUrl), h('span', { class: 'title' }, t.title)));
+  const actions = h('div', { class: 'row', style: { marginTop: '6px' } });
+  if (!r.ran && r.steps.length && !findOnly) {
+    actions.appendChild(h('button', { class: 'small primary', onClick: async () => { const done = await send('command:run', { steps: r.steps, text: q }); renderPlan({ ...r, ...done }, q); refresh(); } }, 'Do it'));
+  }
+  if (r.ran && r.batchId) actions.appendChild(h('button', { class: 'small', onClick: async () => { const n = await send('log:undo', { batchId: r.batchId }); toast(`Undid ${n}`); el.hidden = true; refresh(); } }, 'Undo this'));
+  if (r.tabs.length === 1 && findOnly) actions.appendChild(h('button', { class: 'small primary', onClick: () => jump(r.tabs[0].id) }, 'Jump'));
+  card.appendChild(actions);
+  el.appendChild(card);
 }
 
 send('popupOpened').catch(() => {});

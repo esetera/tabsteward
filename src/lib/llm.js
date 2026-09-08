@@ -275,6 +275,59 @@ export async function askWithModel(query, tabsForModel, groups) {
   return result.json;
 }
 
+// ---------- Commands ----------
+
+export const COMMAND_OPS = ['createGroup', 'addToGroup', 'renameGroup', 'mergeGroups', 'ungroup', 'closeTabs', 'closeGroup', 'collapse', 'expand', 'hide', 'sleep', 'moveToNewWindow', 'find', 'answer'];
+
+const COMMAND_SCHEMA = {
+  type: 'object',
+  properties: {
+    summary: { type: 'string' },
+    steps: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          op: { type: 'string', enum: COMMAND_OPS },
+          title: { type: 'string' },
+          groupId: { type: 'integer' },
+          groupIds: { type: 'array', items: { type: 'integer' } },
+          tabIds: { type: 'array', items: { type: 'integer' } },
+          text: { type: 'string' }
+        },
+        required: ['op', 'title', 'groupId', 'groupIds', 'tabIds', 'text'],
+        additionalProperties: false
+      }
+    }
+  },
+  required: ['summary', 'steps'],
+  additionalProperties: false
+};
+
+const COMMAND_SYSTEM = `You turn a person's instruction about their browser tabs into a short plan of operations. You get their tab groups (id, title, tab count) and open tabs (id, title, host, path, groupId or null).
+Operations (fill unused fields with "" , 0 or []):
+- createGroup: title + tabIds. Make a new group with those tabs.
+- addToGroup: groupId + tabIds. Put tabs into an existing group.
+- renameGroup: groupId + title.
+- mergeGroups: groupIds (two or more) + optional title. All tabs end up in one group.
+- ungroup: tabIds and/or groupId. Take tabs out of groups.
+- closeTabs: tabIds. closeGroup: groupId. Closed tabs are recoverable.
+- collapse / expand / hide / moveToNewWindow: groupId.
+- sleep: tabIds. Unload tabs to save memory.
+- find: tabIds. When they just want to locate tabs.
+- answer: text. When no action fits, or to explain.
+Match tabs and groups by meaning ("the Firefox tabs" = every tab about Firefox; "the two add-on groups" = groups whose titles mention add-ons). Never invent ids. Prefer one precise step over many. "summary" is one sentence saying what the plan does. Return JSON only.`;
+
+export async function commandWithModel(text, groups, tabsForModel) {
+  const user = JSON.stringify({
+    instruction: text,
+    groups: groups.map((g) => ({ id: g.id, title: g.title, tabs: g.count })),
+    tabs: tabsForModel.map(({ id, title, host, path, groupId }) => ({ id, title: (title || '').slice(0, 80), host, path: (path || '').slice(0, 40), groupId }))
+  });
+  const result = await runTask('command', { system: COMMAND_SYSTEM, user, schema: COMMAND_SCHEMA, maxTokens: 1024 });
+  return result.json;
+}
+
 // ---------- Tab note drafting ----------
 
 const NOTE_SCHEMA = { type: 'object', properties: { note: { type: 'string' } }, required: ['note'], additionalProperties: false };
