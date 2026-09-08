@@ -1,7 +1,7 @@
 // Executes steward actions against the browser, records every one in the activity log, sends closed
 // tabs to the Attic, and knows how to undo a batch.
 import { getState, updateState, getSettings, uid } from './store.js';
-import { ensureGroup, keyForGroup, touchGroup } from './groups.js';
+import { ensureGroup, keyForGroup, touchGroup, groupSnapshot } from './groups.js';
 import { getTabMeta, setTabMeta } from './tabmeta.js';
 
 const LOG_MAX = 500;
@@ -115,11 +115,17 @@ export async function execute(action) {
       break;
     }
     case 'group': {
-      const ids = tabs.filter((t) => !t.pinned).map((t) => t.id);
+      const movable = tabs.filter((t) => !t.pinned);
+      const ids = movable.map((t) => t.id);
       if (!ids.length) return null;
-      const previous = tabs.map((t) => ({ id: t.id, groupId: t.groupId }));
+      // Snapshot before anything moves: a cross-window move ungroups a tab, and undo needs to know
+      // where it came from.
+      const previous = tabs.map((t) => ({ id: t.id, groupId: t.groupId, windowId: t.windowId, index: t.index }));
+      const previousGroups = await groupSnapshot(tabs);
+      const away = action.windowId === undefined ? [] : movable.filter((t) => t.windowId !== action.windowId).map((t) => t.id);
+      if (away.length) await browser.tabs.move(away, { windowId: action.windowId, index: -1 });
       const groupId = await ensureGroup(action.windowId, action.title, ids, { color: action.color, category: action.category });
-      undo = { previous, groupId };
+      undo = { previous, previousGroups, groupId };
       action.groupId = groupId;
       break;
     }
@@ -240,8 +246,20 @@ export async function undoBatch(batchId) {
         const byPrev = new Map();
         for (const t of moved) { const prev = e.undo.previous.find((p) => p.id === t.id).groupId; if (!byPrev.has(prev)) byPrev.set(prev, []); byPrev.get(prev).push(t.id); }
         for (const [prev, ids] of byPrev) {
+          // Tabs pulled in from another window go home first; grouping is per window.
+          const home = e.undo.previous.find((p) => p.id === ids[0]).windowId;
+          if (home !== undefined) {
+            const away = (await tabsById(ids)).filter((t) => t.windowId !== home && !t.pinned).map((t) => t.id);
+            if (away.length) { try { await browser.windows.get(home); await browser.tabs.move(away, { windowId: home, index: -1 }); } catch { /* window closed; stay */ } }
+          }
           let back = false;
           if (prev !== -1) { try { await browser.tabGroups.get(prev); await browser.tabs.group({ tabIds: ids, groupId: prev }); back = true; } catch { back = false; } }
+          if (!back && prev !== -1 && e.undo.previousGroups && e.undo.previousGroups[prev]) {
+            // The old group emptied and Firefox dropped it: rebuild it with its title and colour.
+            const was = e.undo.previousGroups[prev];
+            const windowId = (await browser.tabs.get(ids[0])).windowId;
+            try { await ensureGroup(windowId, was.title, ids, { color: was.color }); back = true; } catch { back = false; }
+          }
           if (!back) await browser.tabs.ungroup(ids);
           count += ids.length;
         }

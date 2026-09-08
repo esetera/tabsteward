@@ -306,7 +306,7 @@ const COMMAND_SCHEMA = {
 
 const COMMAND_SYSTEM = `You turn a person's instruction about their browser tabs into a short plan of operations. You get their tab groups (id, title, tab count) and open tabs (id, title, host, path, groupId or null).
 Operations (fill unused fields with "" , 0 or []):
-- createGroup: title + tabIds. Make a new group with those tabs.
+- createGroup: title + tabIds. Make a new group with exactly the tabs the person named. Never add tabs they did not mention, and never pull in tabs that already sit in a group unless they named those tabs. If they ask for a new group without naming any tabs, use answer to ask which tabs they mean.
 - addToGroup: groupId + tabIds. Put tabs into an existing group.
 - renameGroup: groupId + title.
 - mergeGroups: groupIds (two or more) + optional title. All tabs end up in one group.
@@ -316,7 +316,7 @@ Operations (fill unused fields with "" , 0 or []):
 - sleep: tabIds. Unload tabs to save memory.
 - find: tabIds. When they just want to locate tabs.
 - answer: text. When no action fits, or to explain.
-Match tabs and groups by meaning ("the Firefox tabs" = every tab about Firefox; "the two add-on groups" = groups whose titles mention add-ons). Never invent ids. Prefer one precise step over many. "summary" is one sentence saying what the plan does. Return JSON only.`;
+Match tabs and groups by meaning ("the Firefox tabs" = every tab about Firefox; "the two add-on groups" = groups whose titles mention add-ons). Never invent ids. Prefer one precise step over many. Do not ungroup, merge, move or close anything the person did not ask for; existing groups stay as they are unless the instruction is about them. "summary" is one sentence saying what the plan does. Return JSON only.`;
 
 export async function commandWithModel(text, groups, tabsForModel) {
   const user = JSON.stringify({

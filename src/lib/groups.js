@@ -63,6 +63,33 @@ export async function listGroups({ windowId } = {}) {
   return out;
 }
 
+export const GROUP_COLORS = ['blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan', 'orange', 'grey'];
+
+// A colour for a new group that stands apart from the groups already in the window: the least-used
+// one, grey last. A grey group beside a grey group reads as one group in the tab strip.
+export async function pickColor(windowId) {
+  const groups = await browser.tabGroups.query(windowId !== undefined ? { windowId } : {});
+  const used = new Map(GROUP_COLORS.map((c) => [c, 0]));
+  for (const g of groups) if (used.has(g.color)) used.set(g.color, used.get(g.color) + 1);
+  let best = 'grey';
+  let n = Infinity;
+  for (const c of GROUP_COLORS) if (used.get(c) < n) { n = used.get(c); best = c; }
+  return best;
+}
+
+// Snapshot of the groups these tabs are in right now, so an undo can rebuild a group that emptied.
+export async function groupSnapshot(tabs) {
+  const out = {};
+  for (const t of tabs) {
+    if (t.groupId === undefined || t.groupId === NONE || out[t.groupId]) continue;
+    try {
+      const g = await browser.tabGroups.get(t.groupId);
+      out[t.groupId] = { title: g.title || '', color: g.color, windowId: g.windowId, collapsed: !!g.collapsed };
+    } catch { /* gone already */ }
+  }
+  return out;
+}
+
 export async function findGroupByTitle(windowId, title) {
   const groups = await browser.tabGroups.query({ windowId });
   const t = title.trim().toLowerCase();

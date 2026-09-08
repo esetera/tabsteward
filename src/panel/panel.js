@@ -421,8 +421,10 @@ async function askModel() {
 function renderPlan(r, q) {
   const el = clear($('answer'));
   const card = h('div', { class: 'banner' });
-  card.appendChild(h('div', { class: 'row' }, h('b', { class: 'grow' }, r.ran ? 'Done' : r.steps.length ? (r.destructive ? 'Plan (needs your OK)' : 'Plan') : 'No action'), h('button', { class: 'small', onClick: () => { el.hidden = true; } }, 'Close')));
+  const needsOk = r.needsOk || r.destructive;
+  card.appendChild(h('div', { class: 'row' }, h('b', { class: 'grow' }, r.ran ? 'Done' : r.steps.length ? (needsOk ? 'Plan (needs your OK)' : 'Plan') : 'No action'), h('button', { class: 'small', onClick: () => { el.hidden = true; } }, 'Close')));
   if (r.summary) card.appendChild(h('div', { class: 'answer muted' }, r.summary));
+  if (!r.ran && r.notes && r.notes.length) card.appendChild(h('div', { class: 'answer' }, h('span', { class: 'chip warn' }, 'Heads up'), ' ' + r.notes.join('. ') + '.'));
   for (const s of (r.ran ? r.results : r.steps)) card.appendChild(h('div', { class: 'tab' }, h('span', { class: 'badge' + (r.ran ? (s.ok ? ' ok' : ' close') : '') }, r.ran ? (s.ok ? 'ok' : 'failed') : 'step'), h('span', { class: 'title', style: { whiteSpace: 'normal' } }, s.text)));
   const findOnly = r.steps.every((s) => s.op === 'find' || s.op === 'answer');
   if (findOnly || !r.ran) for (const t of r.tabs.slice(0, 12)) card.appendChild(h('div', { class: 'tab', onClick: () => jump(t.id) }, favicon(t.favIconUrl), h('span', { class: 'title' }, t.title)));

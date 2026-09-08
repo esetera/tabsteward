@@ -7,7 +7,7 @@ import { stalenessDecision, hoursIdle, staleThresholdHours } from './staleness.j
 import { findDuplicates } from './dedupe.js';
 import { isEphemeral, isBlankTab, isInternalUrl, hostOf } from './urls.js';
 import { isNeverSend, tabForModel } from './privacy.js';
-import { listGroups, ensureGroup, touchGroup, findGroupByTitle, keyForGroup } from './groups.js';
+import { listGroups, ensureGroup, touchGroup, findGroupByTitle, keyForGroup, pickColor } from './groups.js';
 import { metaForTabs, setTabMeta, getTabMeta } from './tabmeta.js';
 import { execute, undoBatch, lastUndoableBatch, addLog, sendToAttic } from './actions.js';
 import { classifyWithModel, compilePolicyWithModel, askWithModel, draftNoteWithModel, nameGroupWithModel, commandWithModel, COMMAND_OPS, providerStatus, getSpend, sendPolicy, NoProviderError, SpendCapError } from './llm.js';
@@ -591,11 +591,18 @@ export async function ask(query) {
 
 const DESTRUCTIVE = new Set(['closeTabs', 'closeGroup', 'hide']);
 
+function sameTitle(a, b) {
+  return (a || '').trim().toLowerCase() === (b || '').trim().toLowerCase();
+}
+
 function stepText(step, groupsById, tabsById) {
   const g = (id) => `“${(groupsById.get(id) || {}).title || 'group ' + id}”`;
   const n = (ids) => `${ids.length} tab${ids.length === 1 ? '' : 's'}`;
   switch (step.op) {
-    case 'createGroup': return `Create group “${step.title}” with ${n(step.tabIds)}`;
+    case 'createGroup': {
+      const existing = [...groupsById.values()].find((x) => sameTitle(x.title, step.title));
+      return existing ? `Add ${n(step.tabIds)} to the existing group “${existing.title}”` : `Create group “${step.title}” with ${n(step.tabIds)}`;
+    }
     case 'addToGroup': return `Add ${n(step.tabIds)} to ${g(step.groupId)}`;
     case 'renameGroup': return `Rename ${g(step.groupId)} to “${step.title}”`;
     case 'mergeGroups': return `Merge ${step.groupIds.map(g).join(' + ')}${step.title ? ` as “${step.title}”` : ''}`;
@@ -649,20 +656,77 @@ function validatePlan(raw, groups, tabs) {
   return steps;
 }
 
+// The window a new group belongs in: the focused window when any of the tabs live there, otherwise
+// the window holding most of them. The first id the model happened to list must not decide it.
+export async function targetWindowFor(tabs) {
+  if (!tabs.length) return undefined;
+  let focused = null;
+  try { focused = (await browser.windows.getLastFocused()).id; } catch { focused = null; }
+  if (focused !== null && tabs.some((t) => t.windowId === focused)) return focused;
+  const counts = new Map();
+  for (const t of tabs) counts.set(t.windowId, (counts.get(t.windowId) || 0) + 1);
+  let best = tabs[0].windowId;
+  let n = 0;
+  for (const [w, k] of counts) if (k > n) { n = k; best = w; }
+  return best;
+}
+
+// What a plan would disturb beyond what the person asked for. Anything listed here needs an OK
+// before it runs: a "create a group with X" must never quietly empty other groups or drag tabs
+// between windows.
+export async function assessPlan(steps, groups, tabs) {
+  const tabsById = new Map(tabs.map((t) => [t.id, t]));
+  const groupsById = new Map(groups.map((g) => [g.id, g]));
+  const notes = [];
+  const titleOf = (id) => `“${(groupsById.get(id) || {}).title || 'a group'}”`;
+  const plural = (k, w) => `${k} ${w}${k === 1 ? '' : 's'}`;
+  for (const s of steps) {
+    const stepTabs = s.tabIds.map((id) => tabsById.get(id)).filter(Boolean);
+    if (s.op === 'createGroup' || s.op === 'addToGroup') {
+      const target = s.op === 'addToGroup' ? groupsById.get(s.groupId) : null;
+      const windowId = target ? target.windowId : await targetWindowFor(stepTabs);
+      const leaving = new Map();
+      for (const t of stepTabs) {
+        if (t.groupId !== -1 && t.groupId !== (target ? target.id : -1)) leaving.set(t.groupId, (leaving.get(t.groupId) || 0) + 1);
+      }
+      for (const [gid, k] of leaving) {
+        const g = groupsById.get(gid);
+        const empties = g && g.tabs.length <= k;
+        notes.push(`Takes ${plural(k, 'tab')} out of ${titleOf(gid)}${empties ? ', which empties it' : ''}`);
+      }
+      const crossing = stepTabs.filter((t) => t.windowId !== windowId).length;
+      if (crossing) notes.push(`Moves ${plural(crossing, 'tab')} in from another window`);
+      if (s.op === 'createGroup') {
+        const existing = groups.find((g) => g.windowId === windowId && sameTitle(g.title, s.title));
+        if (existing) notes.push(`A group called “${existing.title}” already exists there, so the tabs join it instead`);
+      }
+    } else if (s.op === 'mergeGroups') {
+      notes.push(`Merges ${s.groupIds.map(titleOf).join(' and ')} into one group`);
+    } else if (s.op === 'ungroup') {
+      notes.push(`Ungroups ${plural(s.tabIds.length, 'tab')}`);
+    }
+  }
+  return notes;
+}
+
 export async function command(text, { execute: run = true } = {}) {
   const { groups, tabs, forModel } = await commandContext();
   const raw = await commandWithModel(text, groups.map((g) => ({ id: g.id, title: g.title || 'Untitled', count: g.tabs.length })), forModel);
   const steps = validatePlan(raw, groups, tabs);
   const groupsById = new Map(groups.map((g) => [g.id, g]));
   const tabsById = new Map(tabs.map((t) => [t.id, t]));
+  const notes = await assessPlan(steps, groups, tabs);
+  const destructive = steps.some((s) => DESTRUCTIVE.has(s.op));
   const plan = {
     summary: typeof raw?.summary === 'string' ? raw.summary : '',
     steps: steps.map((s) => ({ ...s, text: s.op === 'answer' ? s.text : stepText(s, groupsById, tabsById) })),
-    destructive: steps.some((s) => DESTRUCTIVE.has(s.op)),
+    destructive,
+    notes,
+    needsOk: destructive || notes.length > 0,
     tabs: [...new Set(steps.flatMap((s) => s.tabIds))].map((id) => tabsById.get(id)).filter(Boolean).map((t) => ({ id: t.id, title: t.title || t.url, url: t.url, favIconUrl: t.favIconUrl || '', windowId: t.windowId }))
   };
   if (!steps.length) plan.summary = plan.summary || 'I could not map that to an action.';
-  if (run && steps.length && !plan.destructive) return { ...plan, ...(await runPlan(plan.steps, text)) };
+  if (run && steps.length && !plan.needsOk) return { ...plan, ...(await runPlan(plan.steps, text)) };
   return plan;
 }
 
@@ -680,11 +744,11 @@ export async function runPlan(steps, text = '') {
   return { ran: true, batchId, results };
 }
 
-async function tabsInWindow(tabIds, windowId) {
+// The tabs a step can still act on. Cross-window moves happen inside the group action itself, after
+// it has recorded where each tab came from, so undo can send them home.
+async function aliveUnpinned(tabIds) {
   const alive = [];
   for (const id of tabIds) { try { alive.push(await browser.tabs.get(id)); } catch { /* gone */ } }
-  const elsewhere = alive.filter((t) => t.windowId !== windowId && !t.pinned).map((t) => t.id);
-  if (elsewhere.length) await browser.tabs.move(elsewhere, { windowId, index: -1 });
   return alive.filter((t) => !t.pinned).map((t) => t.id);
 }
 
@@ -692,13 +756,18 @@ async function runStep(step, batchId, text) {
   const reason = `you asked: “${text.slice(0, 60)}”`;
   switch (step.op) {
     case 'createGroup': {
-      const first = await browser.tabs.get(step.tabIds[0]);
-      const ids = await tabsInWindow(step.tabIds, first.windowId);
-      return execute({ type: 'group', windowId: first.windowId, title: step.title, tabIds: ids, reason, batchId, trigger: 'command' });
+      const alive = [];
+      for (const id of step.tabIds) { try { alive.push(await browser.tabs.get(id)); } catch { /* gone */ } }
+      if (!alive.length) return false;
+      const windowId = await targetWindowFor(alive);
+      const existing = await findGroupByTitle(windowId, step.title);
+      const color = existing ? undefined : await pickColor(windowId);
+      const ids = await aliveUnpinned(step.tabIds);
+      return execute({ type: 'group', windowId, title: step.title, tabIds: ids, color, reason, batchId, trigger: 'command' });
     }
     case 'addToGroup': {
       const g = await browser.tabGroups.get(step.groupId);
-      const ids = await tabsInWindow(step.tabIds, g.windowId);
+      const ids = await aliveUnpinned(step.tabIds);
       return execute({ type: 'group', windowId: g.windowId, title: g.title, tabIds: ids, reason, batchId, trigger: 'command' });
     }
     case 'renameGroup': return execute({ type: 'rename', groupId: step.groupId, title: step.title, reason, batchId, trigger: 'command' });
@@ -708,7 +777,7 @@ async function runStep(step, batchId, text) {
       infos.sort((a, b) => b.tabs.length - a.tabs.length);
       const target = infos[0];
       for (const other of infos.slice(1)) {
-        const ids = await tabsInWindow(other.tabs.map((t) => t.id), target.g.windowId);
+        const ids = await aliveUnpinned(other.tabs.map((t) => t.id));
         if (ids.length) await execute({ type: 'group', windowId: target.g.windowId, title: target.g.title, tabIds: ids, reason, batchId, trigger: 'command' });
       }
       if (step.title && step.title !== target.g.title) await execute({ type: 'rename', groupId: target.g.id, title: step.title, reason, batchId, trigger: 'command' });
@@ -826,7 +895,7 @@ export async function ungroupTabs(tabIds) {
 
 export async function moveTabsToGroup(tabIds, groupId) {
   const g = await browser.tabGroups.get(groupId);
-  const ids = await tabsInWindow(tabIds, g.windowId);
+  const ids = await aliveUnpinned(tabIds);
   if (!ids.length) return null;
   return execute({ type: 'group', windowId: g.windowId, title: g.title, tabIds: ids, reason: 'you dragged it here', trigger: 'user' });
 }
