@@ -9,6 +9,7 @@ let state = null;
 let filter = '';
 
 async function refresh() {
+  atticCache = null;
   try {
     state = await send('overview');
   } catch (e) {
@@ -342,8 +343,26 @@ $('undo').addEventListener('click', async () => {
   refresh();
 });
 
-$('ask').addEventListener('input', (e) => { filter = e.target.value; renderTabs(); });
-$('ask').addEventListener('keydown', (e) => { if (e.key === 'Enter') askModel(); if (e.key === 'Escape') { filter = ''; e.target.value = ''; $('answer').hidden = true; renderTabs(); } });
+let atticCache = null;
+async function renderAtticMatches() {
+  const el = $('attic-matches');
+  const q = filter.trim().toLowerCase();
+  if (!q) { el.hidden = true; return; }
+  if (!atticCache) { try { atticCache = await send('attic:list'); } catch { atticCache = []; } }
+  const hits = atticCache.filter((e) => `${e.title} ${e.url} ${e.groupTitle} ${e.reason} ${e.note}`.toLowerCase().includes(q));
+  el.hidden = false;
+  clear(el).appendChild(h('div', { class: 'row' }, h('h2', { class: 'grow' }, `In the Attic (${hits.length})`), hits.length ? h('button', { class: 'small', onClick: async () => { await send('attic:restoreBatch', { ids: hits.slice(0, 30).map((e) => e.id) }); atticCache = null; toast('Restored'); refresh(); renderAtticMatches(); } }, 'Restore all') : null));
+  if (!hits.length) { el.appendChild(h('div', { class: 'empty' }, 'No closed tab matches.')); return; }
+  for (const e of hits.slice(0, 30)) {
+    el.appendChild(h('div', { class: 'tab', title: `${e.url}\n${e.reason} · ${ago(e.closedAt)}` },
+      favicon(e.favIconUrl), h('span', { class: 'title' }, e.title), e.groupTitle ? h('span', { class: 'chip' }, e.groupTitle) : null, h('span', { class: 'chip' }, ago(e.closedAt)),
+      h('button', { class: 'small', onClick: async (ev) => { ev.stopPropagation(); await send('attic:restore', { id: e.id, activate: false }); atticCache = null; toast('Restored'); refresh(); renderAtticMatches(); } }, 'Restore')));
+  }
+  if (hits.length > 30) el.appendChild(h('div', { class: 'muted' }, `+${hits.length - 30} more in the Attic page`));
+}
+
+$('ask').addEventListener('input', (e) => { filter = e.target.value; renderTabs(); renderAtticMatches(); });
+$('ask').addEventListener('keydown', (e) => { if (e.key === 'Enter') askModel(); if (e.key === 'Escape') { filter = ''; e.target.value = ''; $('answer').hidden = true; $('attic-matches').hidden = true; renderTabs(); } });
 $('ask-btn').addEventListener('click', askModel);
 
 async function askModel() {

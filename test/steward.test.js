@@ -149,7 +149,7 @@ describe('steward end to end (fake browser, no model)', () => {
     const m = await steward.quick('minimise');
     expect(m.executed).toBeGreaterThan(1);
     expect((await browser.tabGroups.query({})).every((g) => g.collapsed)).toBe(true);
-    const awake = (await browser.tabs.query({})).filter((t) => !t.discarded && !t.active && !t.pinned);
+    const awake = (await browser.tabs.query({})).filter((t) => !t.discarded && !t.active && !t.pinned && !t.url.startsWith('about:'));
     expect(awake.length).toBe(0);
     await steward.quick('expandAll');
     expect((await browser.tabGroups.query({})).every((g) => !g.collapsed)).toBe(true);

@@ -294,13 +294,13 @@ export async function quick(kind) {
       case 'group': return runActions((await planTidy(ctx, { allowModel: true })).filter((a) => a.gate === 'group'), 'quick:group');
       case 'closeStale': return runActions((await planTidy(ctx, { allowModel: false })).filter((a) => a.gate === 'close' && a.type === 'close'), 'quick:closeStale');
       case 'sleepAll': {
-        const ids = ctx.tabs.filter((t) => !t.active && !t.pinned && !t.audible && !t.discarded && !t.hidden).map((t) => t.id);
+        const ids = ctx.tabs.filter((t) => !t.active && !t.pinned && !t.audible && !t.discarded && !t.hidden && !isInternalUrl(t.url)).map((t) => t.id);
         return runActions(ids.length ? [{ type: 'sleep', tabIds: ids, reason: 'you put everything to sleep' }] : [], 'quick:sleepAll');
       }
       case 'collapseAll': return runActions(ctx.groups.filter((g) => !g.collapsed).map((g) => ({ type: 'collapse', groupId: g.id, title: g.title, reason: 'you collapsed everything' })), 'quick:collapseAll');
       case 'expandAll': return runActions(ctx.groups.filter((g) => g.collapsed).map((g) => ({ type: 'expand', groupId: g.id, title: g.title, reason: 'you expanded everything' })), 'quick:expandAll');
       case 'minimise': {
-        const ids = ctx.tabs.filter((t) => !t.active && !t.pinned && !t.audible && !t.discarded && !t.hidden).map((t) => t.id);
+        const ids = ctx.tabs.filter((t) => !t.active && !t.pinned && !t.audible && !t.discarded && !t.hidden && !isInternalUrl(t.url)).map((t) => t.id);
         const actions = ctx.groups.filter((g) => !g.collapsed).map((g) => ({ type: 'collapse', groupId: g.id, title: g.title, reason: 'minimised' }));
         if (ids.length) actions.push({ type: 'sleep', tabIds: ids, reason: 'minimised' });
         return runActions(actions, 'quick:minimise');
