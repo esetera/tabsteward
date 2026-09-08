@@ -616,7 +616,7 @@ export async function command(text, { execute: run = true } = {}) {
     tabs: [...new Set(steps.flatMap((s) => s.tabIds))].map((id) => tabsById.get(id)).filter(Boolean).map((t) => ({ id: t.id, title: t.title || t.url, url: t.url, favIconUrl: t.favIconUrl || '', windowId: t.windowId }))
   };
   if (!steps.length) plan.summary = plan.summary || 'I could not map that to an action.';
-  if (run && steps.length && !plan.destructive) return { ...plan, ...(await runPlan(steps, text)) };
+  if (run && steps.length && !plan.destructive) return { ...plan, ...(await runPlan(plan.steps, text)) };
   return plan;
 }
 
