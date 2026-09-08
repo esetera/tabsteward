@@ -3,7 +3,7 @@ import * as steward from '../lib/steward.js';
 import { getSettings, saveSettings, getState, setState, updateState, updateSession, getSession, setSession } from '../lib/store.js';
 import { rebuildGroupKeys, touchGroup } from '../lib/groups.js';
 import { restoreAttic, deleteAttic, pruneAttic, undoBatch } from '../lib/actions.js';
-import { isInternalUrl } from '../lib/urls.js';
+import { isInternalUrl, isEphemeral, isBlankTab } from '../lib/urls.js';
 import { providerStatus, getSpend, runTask, discoverModels } from '../lib/llm.js';
 import { PROVIDERS, resolveProvider, originForBase, isLocalProvider } from '../lib/providers.js';
 import { describeRule, validateRules } from '../lib/rules.js';
@@ -28,6 +28,18 @@ async function ensureContentScript() {
     }
   } catch { /* scripting unavailable */ }
 }
+
+// Local model servers (Ollama in particular) refuse browser requests whose Origin is an extension.
+// Strip the Origin header on this extension's own requests to loopback hosts so a local model works
+// without the user editing OLLAMA_ORIGINS. Only our requests are touched, and only to localhost.
+const SELF = browser.runtime.getURL('').replace(/\/$/, '');
+try {
+  browser.webRequest.onBeforeSendHeaders.addListener((details) => {
+    if (!(details.originUrl || '').startsWith(SELF) && !(details.documentUrl || '').startsWith(SELF)) return {};
+    const requestHeaders = details.requestHeaders.filter((h) => h.name.toLowerCase() !== 'origin');
+    return { requestHeaders };
+  }, { urls: ['http://localhost/*', 'http://127.0.0.1/*'] }, ['blocking', 'requestHeaders']);
+} catch { /* webRequest blocking unavailable; the user can set OLLAMA_ORIGINS instead */ }
 
 browser.runtime.onInstalled.addListener(async ({ reason }) => {
   await scheduleTidy();
@@ -122,6 +134,7 @@ const handlers = {
   overview: () => steward.overview(),
   popupOpened: () => steward.markPopupOpen(),
   tidy: (m) => steward.tidy({ trigger: 'manual', allowModel: m.allowModel !== false }),
+  preview: (m) => steward.preview({ allowModel: !!m.allowModel }),
   undoLast: () => steward.undoLast(),
   suggestions: () => steward.listSuggestions(),
   approve: (m) => steward.approveSuggestion(m.id),
@@ -167,6 +180,12 @@ const handlers = {
   'cache:clear': () => setState('classifyCache', {}),
   'permissions:contains': (m) => browser.permissions.contains({ origins: m.origins }),
   'windows:list': () => browser.windows.getAll({ populate: false }),
+  diag: async () => {
+    let sessionOk = false;
+    try { await browser.storage.session.set({ __probe: 1 }); sessionOk = (await browser.storage.session.get('__probe')).__probe === 1; } catch { sessionOk = false; }
+    const tabs = await browser.tabs.query({});
+    return { sessionOk, tabCreated: await getSession('tabCreated', {}), tabs: tabs.map((t) => ({ id: t.id, url: t.url, title: t.title, active: t.active, pinned: t.pinned, hidden: t.hidden, lastAccessed: t.lastAccessed, ephemeral: isEphemeral(t), blank: isBlankTab(t), internal: isInternalUrl(t.url) })) };
+  },
   'reset': async () => { await browser.storage.local.clear(); await scheduleTidy(); return true; }
 };
 

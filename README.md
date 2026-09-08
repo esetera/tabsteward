@@ -8,6 +8,7 @@ Requires Firefox 139 or newer (native tab groups API).
 
 ## What it does
 
+- **Preview** shows exactly what Tidy would do, with the reason and the autonomy gate for each action, without doing it.
 - **Tidy now** (Alt+Shift+T, or the button). Runs the whole policy: close leftover pages and empty tabs, close duplicates, group ungrouped tabs, sleep or close stale tabs, collapse idle groups, hide long-idle groups.
 - **Auto-group on open.** A new tab that is not spawned from a grouped tab is classified and slotted into a matching existing group.
 - **The Attic.** Every closed tab with its reason, its group and its note. One-click restore puts it back in its group. Expires after a configurable number of days.
@@ -25,7 +26,7 @@ Requires Firefox 139 or newer (native tab groups API).
 
 Pick Ollama or LM Studio as the provider and nothing leaves your machine. The default for a local provider is "let it see everything", so the never-send list only gates cloud providers; turn that off under Privacy if you prefer. Explicit "never send" policy rules apply either way.
 
-- **Ollama**: install, `ollama pull llama3.2` (or qwen3, gemma3), then in settings choose Ollama, click Fetch model list, Save & test. If the test reports HTTP 403, start Ollama with `OLLAMA_ORIGINS="moz-extension://*"`.
+- **Ollama**: install, `ollama pull llama3.2` (or qwen3, gemma3), then in settings choose Ollama, click Fetch model list, Save & test. Ollama normally rejects requests from browser extensions; the add-on strips its own Origin header on localhost requests so this works without setting `OLLAMA_ORIGINS`.
 - **LM Studio**: load a model, start the local server on the Developer tab, enable CORS there, choose LM Studio in settings.
 - **Anything else**: choose Custom and point it at an OpenAI-compatible `/v1` base URL. Localhost and private-network addresses are treated as local (free, uncapped, allowed to see everything).
 
@@ -39,6 +40,14 @@ npm test
 npm run lint
 npm start
 ```
+
+`npm test` runs the unit tests plus an end-to-end run of the steward against an in-memory WebExtension API. There is also a real-Firefox smoke test that installs the add-on temporarily in a headless throwaway profile, opens tabs, and drives every message the UI uses through Marionette:
+
+```bash
+node test/smoke.mjs
+```
+
+Add `--ollama` to also exercise a local model (expects Ollama on localhost:11434; set `OLLAMA_MODEL`, default `llama3.1:8b`), `--visible` to watch it, `--quick` to stop after the plan.
 
 `npm start` launches Firefox with the add-on via web-ext. To load it by hand: `about:debugging` → This Firefox → Load Temporary Add-on → pick `manifest.json`. First run opens the settings page. Firefox treats API hosts as optional permissions in Manifest V3, so click "Grant access to the API host" once for the provider you pick.
 

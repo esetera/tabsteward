@@ -5,8 +5,8 @@
 export const PROVIDERS = {
   ollama: {
     label: 'Ollama (local)', kind: 'openai', base: 'http://localhost:11434/v1', origin: 'http://localhost/*', local: true,
-    defaultModel: 'llama3.2', models: [], jsonMode: 'json_object', keyUrl: 'https://ollama.com/download',
-    help: 'Runs on this machine. Nothing leaves your computer. If you get HTTP 403, start Ollama with OLLAMA_ORIGINS="moz-extension://*".'
+    defaultModel: 'llama3.2', models: [], jsonMode: 'json_schema', keyUrl: 'https://ollama.com/download',
+    help: 'Runs on this machine. Nothing leaves your computer. Click "Grant access to the API host" once so Firefox lets the add-on talk to localhost.'
   },
   lmstudio: {
     label: 'LM Studio (local)', kind: 'openai', base: 'http://localhost:1234/v1', origin: 'http://localhost/*', local: true,
@@ -62,10 +62,11 @@ export function estimateCostUsd(model, inputTokens, outputTokens, local = false)
   return (inputTokens * inRate + outputTokens * outRate) / 1e6;
 }
 
+// Match patterns carry no port, so http://localhost:11434/v1 needs http://localhost/*.
 export function originForBase(base) {
   try {
     const u = new URL(base);
-    return `${u.protocol}//${u.host}/*`;
+    return `${u.protocol}//${u.hostname}/*`;
   } catch { return null; }
 }
 
@@ -123,7 +124,12 @@ async function callOpenAiCompatible(provider, { system, user, schema, maxTokens,
   };
   if (schema && provider.jsonMode === 'json_object') body.response_format = { type: 'json_object' };
   if (schema && provider.jsonMode === 'json_schema') body.response_format = { type: 'json_schema', json_schema: { name: 'reply', schema, strict: true } };
-  const res = await fetchImpl(`${provider.base}/chat/completions`, { method: 'POST', headers, body: JSON.stringify(body), signal });
+  let res = await fetchImpl(`${provider.base}/chat/completions`, { method: 'POST', headers, body: JSON.stringify(body), signal });
+  if (!res.ok && res.status === 400 && body.response_format && body.response_format.type === 'json_schema') {
+    // Older servers know only json_object mode; the schema is still in the system prompt.
+    body.response_format = { type: 'json_object' };
+    res = await fetchImpl(`${provider.base}/chat/completions`, { method: 'POST', headers, body: JSON.stringify(body), signal });
+  }
   if (!res.ok) throw new Error(`${provider.def.label} HTTP ${res.status}: ${(await res.text()).slice(0, 300)}`);
   const data = await res.json();
   const text = data.choices?.[0]?.message?.content ?? '';

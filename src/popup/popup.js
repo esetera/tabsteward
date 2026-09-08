@@ -290,6 +290,26 @@ $('tidy').addEventListener('click', async () => {
   refresh();
 });
 
+$('preview').addEventListener('click', async () => {
+  const el = $('plan');
+  el.hidden = false;
+  clear(el).appendChild(h('div', { class: 'banner' }, 'Planning…'));
+  try {
+    const plan = await send('preview', { allowModel: false });
+    clear(el);
+    const card = h('div', { class: 'banner' });
+    card.appendChild(h('div', { class: 'row' }, h('b', { class: 'grow' }, plan.length ? `Tidy would take ${plan.length} action${plan.length === 1 ? '' : 's'} (without the model)` : 'Nothing to tidy right now'), h('button', { class: 'small', onClick: () => { el.hidden = true; } }, 'Close')));
+    for (const a of plan) {
+      card.appendChild(h('div', { class: 'tab', title: a.tabs.map((t) => t.title).join('\n') },
+        h('span', { class: 'badge ' + a.type }, labelFor(a)),
+        h('span', { class: 'title' }, (a.title ? `“${a.title}” · ` : '') + a.reason),
+        h('span', { class: 'chip' + (a.mode === 'auto' ? ' ok' : ' warn') }, a.mode),
+        a.tabs.length > 1 ? h('span', { class: 'chip' }, `${a.tabs.length} tabs`) : null));
+    }
+    el.appendChild(card);
+  } catch (e) { clear(el).appendChild(h('div', { class: 'banner' }, 'Could not plan: ' + e.message)); }
+});
+
 $('undo').addEventListener('click', async () => {
   const n = await send('undoLast');
   toast(n ? `Undid ${n} change${n === 1 ? '' : 's'}` : 'Nothing to undo');

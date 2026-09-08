@@ -89,7 +89,9 @@ export async function planTidy(ctx, { allowModel = true } = {}) {
   const ephemeral = [];
   for (const t of live) {
     if (t.active || t.pinned) continue;
-    const age = now - (created[t.id] || t.lastAccessed || now);
+    // Firefox reports lastAccessed as 0 for tabs never selected; without a creation record treat those as old.
+    const born = created[t.id] || (t.lastAccessed > 0 ? t.lastAccessed : 0);
+    const age = born ? now - born : Infinity;
     if (isBlankTab(t) && age > ephemeralMs) { blanks.push(t); continue; }
     if (isInternalUrl(t.url)) continue;
     const c = localClassify(t, settings.rules);
@@ -119,14 +121,16 @@ export async function planTidy(ctx, { allowModel = true } = {}) {
     const a = assignments.get(t.id);
     if (!a) continue;
     const key = t.windowId + '||' + a.title.toLowerCase();
-    if (!byWindowTitle.has(key)) byWindowTitle.set(key, { windowId: t.windowId, title: a.title, category: a.category, tabs: [], reasons: new Set() });
+    if (!byWindowTitle.has(key)) byWindowTitle.set(key, { windowId: t.windowId, title: a.title, category: a.category, tabs: [], reasons: new Set(), forced: false });
     const bucket = byWindowTitle.get(key);
     bucket.tabs.push(t);
     bucket.reasons.add(a.reason);
+    if (a.reason === 'policy rule') bucket.forced = true;
   }
   for (const b of byWindowTitle.values()) {
     const existing = groups.find((g) => g.windowId === b.windowId && (g.title || '').toLowerCase() === b.title.toLowerCase());
-    if (!existing && b.tabs.length < (settings.minGroupSize || 2)) continue;
+    // A policy rule is explicit intent, so it may create a group of one. Heuristics and the model need minGroupSize.
+    if (!existing && !b.forced && b.tabs.length < (settings.minGroupSize || 2)) continue;
     actions.push({ type: 'group', gate: 'group', windowId: b.windowId, title: existing ? existing.title : b.title, category: b.category, color: colorFor(b.category), tabIds: b.tabs.map((t) => t.id), reason: (existing ? 'belongs with ' : 'new group: ') + [...b.reasons].slice(0, 2).join('; ') });
   }
 
@@ -246,6 +250,20 @@ export async function tidy({ trigger = 'manual', allowModel = true } = {}) {
   }
 }
 
+// Dry run: what Tidy would do right now, with reasons and the gate each action would pass through.
+export async function preview({ allowModel = false } = {}) {
+  const ctx = await collectContext();
+  const actions = await planTidy(ctx, { allowModel });
+  const out = [];
+  for (const a of actions) {
+    let mode = ctx.settings.autonomy[a.gate] || 'suggest';
+    if (a.needsConfirm && mode === 'auto') mode = 'confirm';
+    if (a.suggestOnly && mode === 'auto') mode = 'suggest';
+    out.push({ type: a.type, subtype: a.subtype || null, gate: a.gate, mode, title: a.title || null, groupId: a.groupId ?? null, reason: a.reason, tabs: await describeTabs(a) });
+  }
+  return out;
+}
+
 // ---------- new-tab auto grouping ----------
 
 export async function queueNewTab(tabId) {
@@ -272,12 +290,13 @@ export async function processPending() {
     const a = assignments.get(t.id);
     if (!a) continue;
     const key = t.windowId + '||' + a.title.toLowerCase();
-    if (!buckets.has(key)) buckets.set(key, { windowId: t.windowId, title: a.title, category: a.category, tabs: [], reason: a.reason });
+    if (!buckets.has(key)) buckets.set(key, { windowId: t.windowId, title: a.title, category: a.category, tabs: [], reason: a.reason, forced: false });
     buckets.get(key).tabs.push(t);
+    if (a.reason === 'policy rule') buckets.get(key).forced = true;
   }
   for (const b of buckets.values()) {
     const existing = ctx.groups.find((g) => g.windowId === b.windowId && (g.title || '').toLowerCase() === b.title.toLowerCase());
-    if (!existing && b.tabs.length < (ctx.settings.minGroupSize || 2)) continue;
+    if (!existing && !b.forced && b.tabs.length < (ctx.settings.minGroupSize || 2)) continue;
     actions.push({ type: 'group', gate: 'group', windowId: b.windowId, title: existing ? existing.title : b.title, category: b.category, color: colorFor(b.category), tabIds: b.tabs.map((t) => t.id), reason: (existing ? 'new tab belongs with ' : 'new group: ') + b.reason });
   }
   if (actions.length) await applyPlan(actions, ctx.settings, { trigger: 'new-tab' });
@@ -511,10 +530,13 @@ export async function ask(query) {
   const r = await askWithModel(query, forModel, groups.map((g) => ({ id: g.id, title: g.title })));
   if (!r) throw new Error('No answer');
   const known = new Set(tabs.map((t) => t.id));
-  const tabIds = (r.tabIds || []).filter((id) => known.has(id));
+  const rawIds = Array.isArray(r.tabIds) ? r.tabIds : Array.isArray(r.tabs) ? r.tabs.map((t) => (t && typeof t === 'object' ? t.id : t)) : Array.isArray(r.ids) ? r.ids : [];
+  const tabIds = [...new Set(rawIds.map((id) => Number(id)).filter((id) => known.has(id)))];
+  if (!['find', 'close', 'group', 'summarize', 'answer'].includes(r.intent)) r.intent = tabIds.length === 1 ? 'find' : 'answer';
   const described = [];
   for (const id of tabIds) { const t = tabs.find((x) => x.id === id); described.push({ id, title: t.title || t.url, url: t.url, favIconUrl: t.favIconUrl || '', windowId: t.windowId }); }
-  return { intent: r.intent, answer: r.answer || '', groupTitle: r.groupTitle || '', tabs: described };
+  const answer = typeof r.answer === 'string' && r.answer ? r.answer : described.length ? `${described.length} matching tab${described.length === 1 ? '' : 's'}` : 'No matching tabs';
+  return { intent: r.intent, answer, groupTitle: typeof r.groupTitle === 'string' ? r.groupTitle : '', tabs: described };
 }
 
 // ---------- notes ----------

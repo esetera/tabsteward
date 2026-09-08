@@ -140,6 +140,7 @@ export async function classifyWithModel(tabsForModel, existingGroups, { useCache
     if (!parsed || !Array.isArray(parsed.assignments)) throw new Error('Model returned no assignments');
     const byId = new Map(pending.map((t) => [t.id, t]));
     fresh = parsed.assignments
+      .map((a) => ({ ...a, id: Number(a.id) }))
       .filter((a) => byId.has(a.id) && typeof a.group === 'string' && a.group.trim())
       .map((a) => ({ id: a.id, group: a.group.trim().slice(0, 40), category: CATEGORIES.includes(a.category) ? a.category : 'Misc', reason: String(a.reason || '').slice(0, 80) }));
     await updateState('classifyCache', {}, (c) => {
@@ -219,7 +220,8 @@ const ASK_SCHEMA = {
 
 const ASK_SYSTEM = `You answer questions about, and act on, a person's open browser tabs.
 Decide the intent: find (they want to jump to a tab), close (they want tabs closed), group (they want tabs grouped; set groupTitle), summarize (describe what a set of tabs is about), answer (a question you can answer from the tab list).
-Fill tabIds with every matching tab id. Keep answer to two sentences. Return JSON only.`;
+Fill tabIds with every matching tab id (numbers from the tab list). Keep answer to two sentences. Return JSON only.
+Example: {"intent":"find","tabIds":[12],"groupTitle":"","answer":"The pricing page is the Acme tab."}`;
 
 export async function askWithModel(query, tabsForModel, groups) {
   const user = JSON.stringify({ question: query, groups: groups.map((g) => ({ id: g.id, title: g.title })), tabs: tabsForModel.map(({ id, title, host, path, group }) => ({ id, title, host, path, group })) });

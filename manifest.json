@@ -8,8 +8,13 @@
       "id": "tabsteward@pure.science",
       "strict_min_version": "139.0",
       "data_collection_permissions": {
-        "required": ["none"],
-        "optional": ["browsingActivity", "websiteContent"]
+        "required": [
+          "none"
+        ],
+        "optional": [
+          "browsingActivity",
+          "websiteContent"
+        ]
       }
     }
   },
@@ -27,7 +32,9 @@
     "idle",
     "notifications",
     "scripting",
-    "bookmarks"
+    "bookmarks",
+    "webRequest",
+    "webRequestBlocking"
   ],
   "host_permissions": [
     "https://api.openai.com/*",
@@ -41,7 +48,9 @@
     "<all_urls>"
   ],
   "background": {
-    "scripts": ["src/background/main.js"],
+    "scripts": [
+      "src/background/main.js"
+    ],
     "type": "module"
   },
   "action": {
@@ -61,15 +70,21 @@
   },
   "commands": {
     "tidy-now": {
-      "suggested_key": { "default": "Alt+Shift+T" },
+      "suggested_key": {
+        "default": "Alt+Shift+T"
+      },
       "description": "Tidy tabs now"
     },
     "undo-last": {
-      "suggested_key": { "default": "Alt+Shift+Z" },
+      "suggested_key": {
+        "default": "Alt+Shift+Z"
+      },
       "description": "Undo the last steward action"
     },
     "_execute_action": {
-      "suggested_key": { "default": "Alt+Shift+S" },
+      "suggested_key": {
+        "default": "Alt+Shift+S"
+      },
       "description": "Open Tab Steward"
     },
     "_execute_sidebar_action": {

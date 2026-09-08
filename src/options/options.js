@@ -79,7 +79,7 @@ $('grant').addEventListener('click', async () => {
   const def = PROVIDERS[id];
   const base = settings.providers[id]?.baseUrl || def.base;
   let origin = def.origin;
-  try { const u = new URL(base); origin = `${u.protocol}//${u.host}/*`; } catch { /* keep default */ }
+  try { const u = new URL(base); origin = `${u.protocol}//${u.hostname}/*`; } catch { /* keep default */ }
   if (!origin) return;
   try {
     const ok = await browser.permissions.request({ origins: [origin] });
@@ -103,6 +103,13 @@ $('fetch-models').addEventListener('click', async () => {
 
 $('test').addEventListener('click', async () => {
   await saveProvider();
+  try {
+    const def = PROVIDERS[settings.provider];
+    const base = settings.providers[settings.provider]?.baseUrl || def.base;
+    const u = new URL(base);
+    const origin = `${u.protocol}//${u.hostname}/*`;
+    if (!(await browser.permissions.contains({ origins: [origin] }))) await browser.permissions.request({ origins: [origin] });
+  } catch { /* the test below reports what is missing */ }
   setStatus('test-status', 'Testing…');
   try {
     const r = await send('provider:test', { settings });

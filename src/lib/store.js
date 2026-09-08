@@ -73,11 +73,23 @@ export async function setState(key, value) {
   return value;
 }
 
+// Read-modify-write helpers are serialised per key so concurrent events (eight tabs restored at once,
+// say) cannot overwrite each other's updates.
+const locks = new Map();
+function withLock(key, fn) {
+  const prev = locks.get(key) || Promise.resolve();
+  const run = prev.then(fn, fn);
+  locks.set(key, run.catch(() => {}));
+  return run;
+}
+
 export async function updateState(key, fallback, fn) {
-  const cur = await getState(key, fallback);
-  const next = fn(cur);
-  await local().set({ [key]: next });
-  return next;
+  return withLock('local:' + key, async () => {
+    const cur = await getState(key, fallback);
+    const next = fn(cur);
+    await local().set({ [key]: next });
+    return next;
+  });
 }
 
 export async function getSession(key, fallback) {
@@ -93,10 +105,12 @@ export async function setSession(key, value) {
 }
 
 export async function updateSession(key, fallback, fn) {
-  const cur = await getSession(key, fallback);
-  const next = fn(cur);
-  await setSession(key, next);
-  return next;
+  return withLock('session:' + key, async () => {
+    const cur = await getSession(key, fallback);
+    const next = fn(cur);
+    await setSession(key, next);
+    return next;
+  });
 }
 
 export function monthKey(d = new Date()) {
