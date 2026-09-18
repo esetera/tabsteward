@@ -34,6 +34,10 @@ function render() {
 
 // ---------- header ----------
 function renderHeader() {
+  const pause = $('pause');
+  pause.textContent = state.paused ? 'Resume' : 'Pause';
+  pause.classList.toggle('warn', !!state.paused);
+  pause.title = state.paused ? 'Resume the steward' : 'Pause everything automatic until you resume (Alt+Shift+X)';
   const p = state.provider;
   const el = $('provider');
   el.textContent = p.ok ? (p.local ? '⌂ ' : '') + p.model : 'no model';
@@ -59,6 +63,10 @@ function renderHome() {
     el.appendChild(h('div', { class: 'banner' }, h('b', { text: 'Welcome. ' }), 'Tab Steward works without a model (known sites, duplicates, staleness). Add a local model (Ollama, LM Studio) or an API key for smart grouping and instructions. ',
       h('button', { class: 'small', onClick: () => browser.runtime.openOptionsPage() }, 'Open settings'), ' ',
       h('button', { class: 'small', onClick: async () => { await send('settings:save', { patch: { onboarded: true } }); refresh(); } }, 'Dismiss')));
+  }
+  if (state.paused) {
+    el.appendChild(h('div', { class: 'banner row' }, h('span', { class: 'grow' }, h('b', { text: 'Paused. ' }), `Nothing automatic runs (no sorting, folding, hiding or sleeping) until you resume. Since ${ago(state.paused.since)}.`),
+      h('button', { class: 'small primary', onClick: async () => { await send('pause:set', { paused: false }); toast('Resumed'); refresh(); } }, 'Resume')));
   }
   const f = state.focus;
   if (f) {
@@ -209,8 +217,9 @@ function groupBlock(g, tabs) {
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') { done = true; refresh(); } });
     input.addEventListener('blur', commit);
   });
-  const header = h('div', { class: 'group-row', draggable: 'true', title: `${g.category} · ${g.count} tabs${g.idleHours >= 1 ? ' · idle ' + hours(g.idleHours) : ''}\nDrag to reorder, drop tabs here to add them` },
+  const header = h('div', { class: 'group-row', draggable: 'true', title: `${g.workbench ? 'Workbench: the steward leaves these tabs alone' : g.category} · ${g.count} tabs${g.idleHours >= 1 ? ' · idle ' + hours(g.idleHours) : ''}\nDrag to reorder, drop tabs here to add them` },
     twisty, swatch, title,
+    g.workbench ? h('span', { class: 'chip ok', title: 'Never regrouped, folded, hidden, slept or closed by the steward' }, 'left alone') : null,
     h('span', { class: 'chip' }, String(g.count)),
     g.idleHours >= 1 ? h('span', { class: 'chip' }, hours(g.idleHours)) : null,
     h('button', { class: 'icon', title: g.collapsed ? 'Expand in the tab strip' : 'Collapse in the tab strip', onClick: (e) => { e.stopPropagation(); act(g.collapsed ? 'expand' : 'collapse', g); } }, g.collapsed ? '▹' : '▿'),
@@ -223,6 +232,7 @@ function groupBlock(g, tabs) {
         h('button', { onClick: () => act('sleep', g, 'Group put to sleep') }, 'Sleep all tabs'),
         h('button', { onClick: () => act('moveToNewWindow', g, 'Moved to its own window') }, 'Move to new window'),
         h('button', { onClick: async () => { const n = await send('gather', { title: g.title }); toast(n ? `Gathered ${n} tabs` : 'Nothing to gather'); refresh(); } }, 'Gather same-named groups here'),
+        g.workbench ? h('button', { onClick: async () => { try { const r = await send('workbench:dissolve', { groupId: g.id }); toast(`Workbench dissolved: ${r.tabCount} tabs loose again`); } catch (e) { toast(e.message, 'err'); } refresh(); } }, 'Dissolve workbench') : null,
         h('button', { onClick: () => act('ungroup', g, 'Ungrouped') }, 'Ungroup'),
         h('button', { class: 'danger', onClick: () => act('close', g, 'Group closed (in the Attic)') }, 'Close group'))));
   header.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/plain', JSON.stringify({ groupId: g.id })); e.dataTransfer.effectAllowed = 'move'; });
@@ -358,6 +368,17 @@ $('more').querySelectorAll('[data-open]').forEach((b) => b.addEventListener('cli
   else if (what === 'sidebar') browser.sidebarAction.open().catch(() => toast('Press Alt+Shift+P, or View → Sidebar → Tab Steward', 'err'));
   if (isPopup) window.close();
 }));
+
+$('pause').addEventListener('click', async () => {
+  const paused = !state.paused;
+  await send('pause:set', { paused });
+  toast(paused ? 'Paused until you resume' : 'Resumed');
+  refresh();
+});
+$('keep').addEventListener('click', async () => {
+  try { const r = await send('workbench:keep'); toast(`${r.tabCount} tab${r.tabCount === 1 ? '' : 's'} kept together in “${r.title}”`); } catch (e) { toast(e.message, 'err'); }
+  refresh();
+});
 
 document.querySelectorAll('#quick [data-quick]').forEach((b) => b.addEventListener('click', async () => {
   const kind = b.dataset.quick;

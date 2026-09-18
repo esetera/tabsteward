@@ -54,7 +54,7 @@ Protect calendar.google.com."></textarea>
     <p class="hint"><b>Auto</b> does it and logs it. <b>Confirm</b> queues it and pings you. <b>Suggest</b> queues it quietly for the next time you open the steward. Closing anything always goes through the Attic, where it can be restored for <span id="attic-days-inline">30</span> days.</p>
     <div id="dials"></div>
     <label class="inline"><input type="checkbox" id="autoTidy"> Tidy automatically on a schedule and when the computer goes idle</label>
-    <label class="inline"><input type="checkbox" id="autoGroupNewTabs"> Slot new tabs into a matching group as they open</label>
+    <label class="inline"><input type="checkbox" id="autoGroupNewTabs"> Sort loose tabs into matching groups once you have left them alone</label>
     <label class="inline"><input type="checkbox" id="notifications"> Show a notification when suggestions need confirmation</label>
   </section>
 
@@ -68,6 +68,7 @@ Protect calendar.google.com."></textarea>
       <div><label>Put tabs to sleep at this fraction of their close threshold</label><input type="number" id="sleepFraction" min="0.1" max="1" step="0.1"></div>
       <div><label>Offer “read later” for articles open longer than (days)</label><input type="number" id="readLaterDays" min="1"></div>
       <div><label>Keep closed tabs in the Attic for (days)</label><input type="number" id="atticDays" min="1"></div>
+      <div><label>Leave loose tabs alone for (minutes) before sorting them</label><input type="number" id="handsOffMinutes" min="0" step="5" title="The tab you are on, and any tab you opened or switched to within this time, is never grouped automatically"></div>
       <div><label>Smallest group the steward will create (tabs)</label><input type="number" id="minGroupSize" min="1"></div>
     </div>
     <h3>Close after idle, by category (hours)</h3>

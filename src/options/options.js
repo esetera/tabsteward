@@ -176,7 +176,7 @@ function renderAutonomy() {
 }
 
 // ---------- timing ----------
-const TIMING = ['tidyIntervalMinutes', 'ephemeralMinutes', 'collapseIdleHours', 'hideIdleHours', 'sleepFraction', 'readLaterDays', 'atticDays', 'minGroupSize'];
+const TIMING = ['tidyIntervalMinutes', 'ephemeralMinutes', 'collapseIdleHours', 'hideIdleHours', 'sleepFraction', 'readLaterDays', 'atticDays', 'minGroupSize', 'handsOffMinutes'];
 function renderTiming() {
   for (const id of TIMING) $(id).value = settings[id];
   const el = clear($('stale'));

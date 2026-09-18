@@ -1,3 +1,4 @@
+import { markStewardMove } from './tabmeta.js';
 // Native tab group helpers. Groups get a stable key (stored on their tabs) because Firefox may
 // hand a restored group a different id.
 import { getSession, updateSession, uid } from './store.js';
@@ -104,9 +105,10 @@ export async function ensureGroup(windowId, title, tabIds, { color, category } =
   if (existing) {
     const already = new Set((await browser.tabs.query({ groupId: existing.id })).map((t) => t.id));
     const toAdd = tabIds.filter((id) => !already.has(id));
-    if (toAdd.length) await browser.tabs.group({ tabIds: toAdd, groupId: existing.id });
+    if (toAdd.length) { await markStewardMove(toAdd); await browser.tabs.group({ tabIds: toAdd, groupId: existing.id }); }
     groupId = existing.id;
   } else {
+    await markStewardMove(tabIds);
     groupId = await browser.tabs.group({ tabIds, createProperties: { windowId } });
     await browser.tabGroups.update(groupId, { title, color: color || colorFor(category || 'Misc') });
   }

@@ -2,6 +2,7 @@
 import * as steward from '../lib/steward.js';
 import { getSettings, saveSettings, getState, setState, updateState, updateSession, getSession, setSession } from '../lib/store.js';
 import { rebuildGroupKeys, touchGroup } from '../lib/groups.js';
+import { setTabMeta, wasStewardMove } from '../lib/tabmeta.js';
 import { restoreAttic, deleteAttic, pruneAttic, undoBatch } from '../lib/actions.js';
 import { isInternalUrl, isEphemeral, isBlankTab } from '../lib/urls.js';
 import { providerStatus, getSpend, runTask, discoverModels } from '../lib/llm.js';
@@ -9,6 +10,45 @@ import { PROVIDERS, resolveProvider, originForBase, isLocalProvider } from '../l
 import { describeRule, validateRules } from '../lib/rules.js';
 
 const CONTENT_SCRIPT_ID = 'ts-formguard';
+
+// ---------- pause badge and menus ----------
+
+async function showPaused() {
+  const paused = await steward.isPaused();
+  try {
+    await browser.action.setBadgeText({ text: paused ? 'II' : '' });
+    await browser.action.setBadgeBackgroundColor({ color: '#8a6d00' });
+    await browser.action.setTitle({ title: paused ? 'Tab Steward (paused: nothing automatic runs until you resume)' : 'Tab Steward' });
+    await browser.menus.update('ts-pause', { title: paused ? 'Resume Tab Steward' : 'Pause Tab Steward' });
+  } catch { /* menus not created yet */ }
+}
+
+async function createMenus() {
+  await browser.menus.removeAll();
+  browser.menus.create({ id: 'ts-keep-together', contexts: ['tab'], title: 'Keep these tabs together (Workbench)' });
+  browser.menus.create({ id: 'ts-pause', contexts: ['action'], title: 'Pause Tab Steward' });
+  await showPaused();
+}
+
+async function togglePause() {
+  await steward.setPaused(!(await steward.isPaused()));
+  await showPaused();
+}
+
+async function keepTogetherFrom(tab) {
+  // Right-clicking one of several selected tabs keeps all the selected ones together.
+  const ids = tab && tab.highlighted ? (await browser.tabs.query({ windowId: tab.windowId, highlighted: true })).map((t) => t.id) : tab ? [tab.id] : undefined;
+  try { await steward.keepTogether(ids); } catch (e) { notify(String(e.message || e)); }
+}
+
+function notify(message) {
+  try { browser.notifications.create({ type: 'basic', title: 'Tab Steward', message, iconUrl: browser.runtime.getURL('icons/icon.svg') }); } catch { /* notifications off */ }
+}
+
+browser.menus.onClicked.addListener(async (info, tab) => {
+  if (info.menuItemId === 'ts-keep-together') await keepTogetherFrom(tab);
+  else if (info.menuItemId === 'ts-pause') await togglePause();
+});
 
 async function scheduleTidy() {
   const settings = await getSettings();
@@ -45,10 +85,12 @@ browser.runtime.onInstalled.addListener(async ({ reason }) => {
   await scheduleTidy();
   await rebuildGroupKeys();
   await ensureContentScript();
+  await createMenus();
   if (reason === 'install') browser.runtime.openOptionsPage();
 });
 
 browser.runtime.onStartup.addListener(async () => {
+  await createMenus();
   await scheduleTidy();
   await rebuildGroupKeys();
   await ensureContentScript();
@@ -69,15 +111,26 @@ browser.tabs.onUpdated.addListener(async (tabId, change, tab) => {
 }, { properties: ['status'] });
 
 browser.tabs.onActivated.addListener(async ({ tabId }) => {
+  // Hands off: a tab switched to is in use, so automatic grouping waits.
+  await updateSession('tabUsed', {}, (m) => ({ ...m, [tabId]: Date.now() }));
   try {
     const t = await browser.tabs.get(tabId);
     await touchGroup(t.groupId);
   } catch { /* gone */ }
 });
 
+// A group change the steward did not make is the user's: that placement sticks.
+browser.tabs.onUpdated.addListener(async (tabId, change) => {
+  if (!('groupId' in change)) return;
+  if (await wasStewardMove(tabId)) return;
+  await setTabMeta(tabId, { userPlaced: true, userPlacedAt: Date.now() });
+  await updateSession('tabUsed', {}, (m) => ({ ...m, [tabId]: Date.now() }));
+});
+
 browser.tabs.onRemoved.addListener(async (tabId) => {
   await updateSession('tabCreated', {}, (m) => { const n = { ...m }; delete n[tabId]; return n; });
   await updateSession('classified', {}, (m) => { const n = { ...m }; delete n[tabId]; return n; });
+  await updateSession('tabUsed', {}, (m) => { const n = { ...m }; delete n[tabId]; return n; });
 });
 
 browser.tabGroups.onRemoved.addListener(async (group) => {
@@ -107,6 +160,8 @@ browser.commands.onCommand.addListener(async (command) => {
   else if (command === 'undo-last') await steward.undoLast();
   else if (command === 'cleanup') await steward.quick('cleanup');
   else if (command === 'minimise') await steward.quick('minimise');
+  else if (command === 'keep-together') await keepTogetherFrom((await browser.tabs.query({ active: true, lastFocusedWindow: true }))[0]);
+  else if (command === 'pause') await togglePause();
 });
 
 browser.notifications.onClicked.addListener(async () => {
@@ -171,6 +226,10 @@ const handlers = {
   'focus:start': (m) => steward.startFocus(m.groupId, m.minutes),
   'focus:end': () => steward.endFocus(),
   'focus:status': () => steward.focusStatus(),
+  'pause:get': () => steward.pauseStatus(),
+  'pause:set': async (m) => { const r = await steward.setPaused(!!m.paused); await showPaused(); return r; },
+  'workbench:keep': (m) => steward.keepTogether(m.tabIds),
+  'workbench:dissolve': (m) => steward.dissolveWorkbench(m.groupId),
   'note:set': (m) => steward.setNote(m.tabId, m.note),
   'note:draft': (m) => steward.draftNote(m.tabId),
   'settings:get': () => getSettings(),

@@ -9,10 +9,18 @@ import { isEphemeral, isBlankTab, isInternalUrl, hostOf } from './urls.js';
 import { isNeverSend, tabForModel } from './privacy.js';
 import { listGroups, ensureGroup, touchGroup, findGroupByTitle, keyForGroup, pickColor } from './groups.js';
 import { metaForTabs, setTabMeta, getTabMeta } from './tabmeta.js';
-import { execute, undoBatch, lastUndoableBatch, addLog, sendToAttic } from './actions.js';
+import { execute, undoBatch, lastUndoableBatch, addLog, sendToAttic, markStewardMove } from './actions.js';
 import { classifyWithModel, compilePolicyWithModel, askWithModel, draftNoteWithModel, nameGroupWithModel, commandWithModel, COMMAND_OPS, providerStatus, getSpend, sendPolicy, NoProviderError, SpendCapError } from './llm.js';
 
 const SNOOZE_MS = 24 * 3600000;
+
+// Triggers the user did not press: these respect hands-off, workbenches and pause.
+const AUTOMATIC_TRIGGERS = new Set(['scheduled', 'idle', 'new-tab']);
+
+// A workbench is a group whose title starts with "Workbench": tabs the user is working with together.
+// The steward never regroups, collapses, hides, sleeps, closes or dedupes them, and never adds tabs to it.
+export const WORKBENCH_TITLE = 'Workbench';
+export const isWorkbenchTitle = (title) => /^workbench\b/i.test((title || '').trim());
 const SUGGESTION_MAX = 60;
 
 // ---------- context ----------
@@ -24,7 +32,30 @@ async function collectContext() {
   const groups = await listGroups();
   const focus = await getSession('focus', null);
   const created = await getSession('tabCreated', {});
-  return { settings, tabs, meta, groups, focus, created, now: Date.now() };
+  const used = await getSession('tabUsed', {});
+  return { settings, tabs, meta, groups, focus, created, used, now: Date.now() };
+}
+
+/** Workbench group ids, from their titles (so they survive restarts). */
+export function workbenchIds(groups) {
+  return new Set(groups.filter((g) => isWorkbenchTitle(g.title)).map((g) => g.id));
+}
+
+/** When the user last touched a tab: created, switched to, or used. */
+export function lastTouched(t, { created = {}, used = {} } = {}) {
+  return Math.max(created[t.id] || 0, t.lastAccessed || 0, used[t.id] || 0);
+}
+
+/**
+ * Hands off: an automatic pass may group a loose tab only when it isn't the tab being
+ * looked at and nothing has touched it for handsOffMinutes. Returns the time it becomes
+ * eligible (0 = now).
+ */
+export function handsOffUntil(t, ctx) {
+  if (t.active) return Infinity;
+  const ms = (ctx.settings.handsOffMinutes ?? 20) * 60000;
+  const until = lastTouched(t, ctx) + ms;
+  return until > ctx.now ? until : 0;
 }
 
 function localClassify(tab, rules) {
@@ -73,7 +104,21 @@ async function assignGroups(candidates, ctx, { allowModel = true } = {}) {
 
 // ---------- planning ----------
 
-export async function planTidy(ctx, { allowModel = true, regroupAll = false } = {}) {
+/**
+ * A group action for a bucket of tabs. Joining a group that is collapsed or hidden would make the
+ * tabs vanish from where the user was, so that becomes a suggestion instead (and executing it
+ * opens the group).
+ */
+function groupingAction(b, existing, reason, joinWord) {
+  const folded = !!existing && (existing.collapsed || (existing.tabs || []).every((t) => t.hidden));
+  return {
+    type: 'group', gate: 'group', windowId: b.windowId, title: existing ? existing.title : b.title, category: b.category, color: colorFor(b.category),
+    tabIds: b.tabs.map((t) => t.id), reason: (existing ? joinWord : 'new group: ') + reason + (folded ? ' (the group is folded, so this waits for your OK)' : ''),
+    ...(folded ? { suggestOnly: true, expand: true } : {})
+  };
+}
+
+export async function planTidy(ctx, { allowModel = true, regroupAll = false, handsOff = false } = {}) {
   const { settings, tabs, meta, groups, focus, created, now } = ctx;
   const actions = [];
   const scheduledClose = new Set();
@@ -81,6 +126,12 @@ export async function planTidy(ctx, { allowModel = true, regroupAll = false } = 
   if (focus) {
     for (const t of tabs) if (t.groupId === focus.groupId) inFocusIds.add(t.id);
   }
+  // Workbench tabs are left entirely alone (treated like a focus session that never ends).
+  const benches = workbenchIds(groups);
+  const onBench = (t) => benches.has(t.groupId);
+  for (const t of tabs) if (onBench(t)) inFocusIds.add(t.id);
+  // Tabs whose group the user changed by hand stay where the user put them.
+  const userPlaced = (t) => !!(meta.get(t.id) || {}).userPlaced;
   const live = tabs.filter((t) => !t.hidden);
 
   // 1. Ephemeral and blank tabs
@@ -88,7 +139,7 @@ export async function planTidy(ctx, { allowModel = true, regroupAll = false } = 
   const blanks = [];
   const ephemeral = [];
   for (const t of live) {
-    if (t.active || t.pinned) continue;
+    if (t.active || t.pinned || onBench(t)) continue;
     // Firefox reports lastAccessed as 0 for tabs never selected; without a creation record treat those as old.
     const born = created[t.id] || (t.lastAccessed > 0 ? t.lastAccessed : 0);
     const age = born ? now - born : Infinity;
@@ -114,7 +165,8 @@ export async function planTidy(ctx, { allowModel = true, regroupAll = false } = 
   }
 
   // 3. Grouping of ungrouped tabs (or every tab, when asked to rethink the groups)
-  const ungrouped = live.filter((t) => (regroupAll || t.groupId === -1) && !t.pinned && !isInternalUrl(t.url) && !scheduledClose.has(t.id));
+  const ungrouped = live.filter((t) => (regroupAll || t.groupId === -1) && !t.pinned && !isInternalUrl(t.url) && !scheduledClose.has(t.id)
+    && !onBench(t) && !userPlaced(t) && !(handsOff && handsOffUntil(t, ctx)));
   const assignments = ungrouped.length ? await assignGroups(ungrouped, ctx, { allowModel }) : new Map();
   const groupTitleById = new Map(groups.map((g) => [g.id, (g.title || '').toLowerCase()]));
   const byWindowTitle = new Map();
@@ -130,10 +182,11 @@ export async function planTidy(ctx, { allowModel = true, regroupAll = false } = 
     if (a.reason === 'policy rule') bucket.forced = true;
   }
   for (const b of byWindowTitle.values()) {
+    if (isWorkbenchTitle(b.title)) continue; // nothing is ever added to a workbench
     const existing = groups.find((g) => g.windowId === b.windowId && (g.title || '').toLowerCase() === b.title.toLowerCase());
     // A policy rule is explicit intent, so it may create a group of one. Heuristics and the model need minGroupSize.
     if (!existing && !b.forced && b.tabs.length < (settings.minGroupSize || 2)) continue;
-    actions.push({ type: 'group', gate: 'group', windowId: b.windowId, title: existing ? existing.title : b.title, category: b.category, color: colorFor(b.category), tabIds: b.tabs.map((t) => t.id), reason: (existing ? 'belongs with ' : 'new group: ') + [...b.reasons].slice(0, 2).join('; ') });
+    actions.push(groupingAction(b, existing, [...b.reasons].slice(0, 2).join('; '), 'belongs with '));
   }
 
   // 4. Staleness: sleep, close, read later
@@ -161,7 +214,7 @@ export async function planTidy(ctx, { allowModel = true, regroupAll = false } = 
   const collapseMs = (settings.collapseIdleHours || 2) * 3600000;
   const hideMs = (settings.hideIdleHours || 24) * 3600000;
   for (const g of groups) {
-    if (g.hasActive || !g.tabs.length) continue;
+    if (g.hasActive || !g.tabs.length || benches.has(g.id)) continue;
     if (focus && g.id === focus.groupId) continue;
     const allHidden = g.tabs.every((t) => t.hidden);
     if (allHidden) continue;
@@ -237,12 +290,14 @@ async function notifyOnce(count) {
 }
 
 export async function tidy({ trigger = 'manual', allowModel = true, regroupAll = false } = {}) {
+  const automatic = AUTOMATIC_TRIGGERS.has(trigger);
+  if (automatic && await isPaused()) return { skipped: 'paused', executed: [], suggested: [] };
   const running = await getSession('tidyRunning', 0);
   if (running && Date.now() - running < 120000) return { skipped: 'already running' };
   await setSession('tidyRunning', Date.now());
   try {
     const ctx = await collectContext();
-    const actions = await planTidy(ctx, { allowModel, regroupAll });
+    const actions = await planTidy(ctx, { allowModel, regroupAll, handsOff: automatic });
     const result = await applyPlan(actions, ctx.settings, { trigger });
     await pruneSuggestions();
     await setState('lastTidy', { ts: Date.now(), trigger, executed: result.executed.length, suggested: result.suggested.length });
@@ -294,14 +349,16 @@ export async function quick(kind) {
       case 'group': return runActions((await planTidy(ctx, { allowModel: true })).filter((a) => a.gate === 'group'), 'quick:group');
       case 'closeStale': return runActions((await planTidy(ctx, { allowModel: false })).filter((a) => a.gate === 'close' && a.type === 'close'), 'quick:closeStale');
       case 'sleepAll': {
-        const ids = ctx.tabs.filter((t) => !t.active && !t.pinned && !t.audible && !t.discarded && !t.hidden && !isInternalUrl(t.url)).map((t) => t.id);
+        const benches = workbenchIds(ctx.groups);
+        const ids = ctx.tabs.filter((t) => !t.active && !t.pinned && !t.audible && !t.discarded && !t.hidden && !isInternalUrl(t.url) && !benches.has(t.groupId)).map((t) => t.id);
         return runActions(ids.length ? [{ type: 'sleep', tabIds: ids, reason: 'you put everything to sleep' }] : [], 'quick:sleepAll');
       }
-      case 'collapseAll': return runActions(ctx.groups.filter((g) => !g.collapsed).map((g) => ({ type: 'collapse', groupId: g.id, title: g.title, reason: 'you collapsed everything' })), 'quick:collapseAll');
+      case 'collapseAll': return runActions(ctx.groups.filter((g) => !g.collapsed && !isWorkbenchTitle(g.title)).map((g) => ({ type: 'collapse', groupId: g.id, title: g.title, reason: 'you collapsed everything' })), 'quick:collapseAll');
       case 'expandAll': return runActions(ctx.groups.filter((g) => g.collapsed).map((g) => ({ type: 'expand', groupId: g.id, title: g.title, reason: 'you expanded everything' })), 'quick:expandAll');
       case 'minimise': {
-        const ids = ctx.tabs.filter((t) => !t.active && !t.pinned && !t.audible && !t.discarded && !t.hidden && !isInternalUrl(t.url)).map((t) => t.id);
-        const actions = ctx.groups.filter((g) => !g.collapsed).map((g) => ({ type: 'collapse', groupId: g.id, title: g.title, reason: 'minimised' }));
+        const benches = workbenchIds(ctx.groups);
+        const ids = ctx.tabs.filter((t) => !t.active && !t.pinned && !t.audible && !t.discarded && !t.hidden && !isInternalUrl(t.url) && !benches.has(t.groupId)).map((t) => t.id);
+        const actions = ctx.groups.filter((g) => !g.collapsed && !benches.has(g.id)).map((g) => ({ type: 'collapse', groupId: g.id, title: g.title, reason: 'minimised' }));
         if (ids.length) actions.push({ type: 'sleep', tabIds: ids, reason: 'minimised' });
         return runActions(actions, 'quick:minimise');
       }
@@ -319,24 +376,36 @@ export async function queueNewTab(tabId) {
   browser.alarms.create('classify-pending', { delayInMinutes: 0.1 });
 }
 
+/**
+ * New loose tabs wait their turn: each is grouped only once hands-off allows (not the tab being
+ * looked at, untouched for handsOffMinutes). Tabs not yet eligible stay queued and the alarm is
+ * set for the earliest one. Nothing runs while paused; the queue is kept for when it resumes.
+ */
 export async function processPending() {
   const pending = await getSession('pendingNew', []);
-  if (!pending.length) return;
-  await setSession('pendingNew', []);
+  if (!pending.length || await isPaused()) return;
   const ctx = await collectContext();
-  if (!ctx.settings.autoGroupNewTabs) return;
-  const tabs = [];
+  if (!ctx.settings.autoGroupNewTabs) { await setSession('pendingNew', []); return; }
+  const benches = workbenchIds(ctx.groups);
+  const ready = [];
+  const waiting = [];
+  let nextDue = Infinity;
   for (const id of pending) {
     const t = ctx.tabs.find((x) => x.id === id);
-    if (t && t.groupId === -1 && !t.pinned && !isInternalUrl(t.url) && !isBlankTab(t)) tabs.push(t);
+    if (!t || t.groupId !== -1 || t.pinned || isInternalUrl(t.url) || isBlankTab(t) || benches.has(t.groupId) || (ctx.meta.get(t.id) || {}).userPlaced) continue;
+    const until = handsOffUntil(t, ctx);
+    if (until) { waiting.push(id); if (until < nextDue) nextDue = until; } else ready.push(t);
   }
-  if (!tabs.length) return;
-  const assignments = await assignGroups(tabs, ctx);
+  await setSession('pendingNew', waiting);
+  // The active tab has no due time; look again after the hands-off period.
+  if (waiting.length) browser.alarms.create('classify-pending', { when: Number.isFinite(nextDue) ? nextDue + 5000 : ctx.now + (ctx.settings.handsOffMinutes ?? 20) * 60000 });
+  if (!ready.length) return;
+  const assignments = await assignGroups(ready, ctx);
   const actions = [];
   const buckets = new Map();
-  for (const t of tabs) {
+  for (const t of ready) {
     const a = assignments.get(t.id);
-    if (!a) continue;
+    if (!a || isWorkbenchTitle(a.title)) continue;
     const key = t.windowId + '||' + a.title.toLowerCase();
     if (!buckets.has(key)) buckets.set(key, { windowId: t.windowId, title: a.title, category: a.category, tabs: [], reason: a.reason, forced: false });
     buckets.get(key).tabs.push(t);
@@ -345,9 +414,70 @@ export async function processPending() {
   for (const b of buckets.values()) {
     const existing = ctx.groups.find((g) => g.windowId === b.windowId && (g.title || '').toLowerCase() === b.title.toLowerCase());
     if (!existing && !b.forced && b.tabs.length < (ctx.settings.minGroupSize || 2)) continue;
-    actions.push({ type: 'group', gate: 'group', windowId: b.windowId, title: existing ? existing.title : b.title, category: b.category, color: colorFor(b.category), tabIds: b.tabs.map((t) => t.id), reason: (existing ? 'new tab belongs with ' : 'new group: ') + b.reason });
+    actions.push(groupingAction(b, existing, b.reason, 'new tab belongs with '));
   }
   if (actions.length) await applyPlan(actions, ctx.settings, { trigger: 'new-tab' });
+}
+
+// ---------- pause ----------
+
+/** Paused stays paused until the user resumes (it survives restarts). */
+export async function isPaused() { return !!(await getState('paused', null)); }
+export async function setPaused(paused) {
+  await setState('paused', paused ? { since: Date.now() } : null);
+  await addLog({ type: paused ? 'paused' : 'resumed', reason: paused ? 'you paused the steward: nothing automatic runs until you resume' : 'you resumed the steward', tabs: [] });
+  if (!paused) browser.alarms.create('classify-pending', { delayInMinutes: 0.1 });
+  return pauseStatus();
+}
+export async function pauseStatus() { return getState('paused', null); }
+
+// ---------- workbench ----------
+
+/**
+ * Keep these tabs together: puts them in a "Workbench" group in their window, left entirely alone
+ * by the steward. With no ids, uses the highlighted (multi-selected) tabs of the focused window,
+ * or just the active tab.
+ */
+export async function keepTogether(tabIds) {
+  let tabs;
+  if (tabIds && tabIds.length) tabs = (await Promise.all(tabIds.map((id) => browser.tabs.get(id).catch(() => null)))).filter(Boolean);
+  else {
+    const win = await browser.windows.getLastFocused();
+    tabs = await browser.tabs.query({ windowId: win.id, highlighted: true });
+    if (!tabs.length) tabs = await browser.tabs.query({ windowId: win.id, active: true });
+  }
+  tabs = tabs.filter((t) => !t.pinned);
+  if (!tabs.length) throw new Error('Select the tabs to keep together (Ctrl or Cmd-click them), then try again.');
+  const windowId = tabs[0].windowId;
+  const others = tabs.filter((t) => t.windowId !== windowId);
+  const ids = tabs.map((t) => t.id);
+  await markStewardMove(ids);
+  if (others.length) await browser.tabs.move(others.map((t) => t.id), { windowId, index: -1 });
+  const existing = (await browser.tabGroups.query({ windowId })).map((g) => g.title || '');
+  let title = WORKBENCH_TITLE;
+  for (let n = 2; existing.some((t) => t.toLowerCase() === title.toLowerCase()); n++) title = `${WORKBENCH_TITLE} ${n}`;
+  const groupId = await browser.tabs.group({ tabIds: ids, createProperties: { windowId } });
+  await browser.tabGroups.update(groupId, { title, color: 'grey', collapsed: false });
+  for (const id of ids) await setTabMeta(id, { userPlaced: false });
+  await touchGroup(groupId);
+  await addLog({ type: 'workbench', reason: `you kept ${ids.length} tab${ids.length === 1 ? '' : 's'} together in "${title}"; the steward leaves them alone`, tabs: tabs.map((t) => ({ id: t.id, title: t.title, url: t.url })) });
+  return { groupId, title, tabCount: ids.length };
+}
+
+/** Dissolve a workbench: its tabs go back to being loose (and are sorted later, once hands-off allows). */
+export async function dissolveWorkbench(groupId) {
+  const group = await browser.tabGroups.get(groupId);
+  if (!isWorkbenchTitle(group.title)) throw new Error('That group is not a workbench.');
+  const tabs = await browser.tabs.query({ groupId });
+  const ids = tabs.map((t) => t.id);
+  await markStewardMove(ids);
+  if (ids.length) await browser.tabs.ungroup(ids);
+  const used = Date.now();
+  await updateSession('tabUsed', {}, (m) => ({ ...m, ...Object.fromEntries(ids.map((id) => [id, used])) }));
+  await updateSession('pendingNew', [], (p) => [...new Set([...p, ...ids])]);
+  browser.alarms.create('classify-pending', { delayInMinutes: 0.1 });
+  await addLog({ type: 'workbench-end', reason: `you dissolved "${group.title}"; its ${ids.length} tabs are loose again`, tabs: tabs.map((t) => ({ id: t.id, title: t.title, url: t.url })) });
+  return { dissolved: true, tabCount: ids.length };
 }
 
 // ---------- suggestions ----------
@@ -862,14 +992,14 @@ export async function overview() {
   const provider = await providerStatus();
   return {
     counts: { tabs: tabs.length, sleeping: tabs.filter((t) => t.discarded).length, hidden: tabs.filter((t) => t.hidden).length, groups: groups.length, windows: new Set(tabs.map((t) => t.windowId)).size, staleSoon },
-    groups: groups.map((g) => ({ id: g.id, windowId: g.windowId, title: g.title, color: g.color, collapsed: g.collapsed, key: g.key, count: g.tabs.length, hasActive: g.hasActive, idleHours: Math.round((now - g.lastActive) / 3600000), category: g.category, allHidden: g.tabs.every((t) => t.hidden) })),
+    groups: groups.map((g) => ({ id: g.id, windowId: g.windowId, title: g.title, color: g.color, collapsed: g.collapsed, key: g.key, count: g.tabs.length, hasActive: g.hasActive, idleHours: Math.round((now - g.lastActive) / 3600000), category: g.category, allHidden: g.tabs.every((t) => t.hidden), workbench: isWorkbenchTitle(g.title) })),
     tabs: tabRows,
     suggestions,
     hiddenGroups: await hiddenGroups(),
     closedSinceLastOpen: attic.filter((e) => e.closedAt > lastOpen).slice(0, 20),
     atticCount: attic.length,
     lastTidy: await getState('lastTidy', null),
-    focus, spend, provider, streakNudges,
+    focus, spend, provider, streakNudges, paused: await pauseStatus(), handsOffMinutes: settings.handsOffMinutes ?? 20,
     autonomy: settings.autonomy, monthlyCapUsd: settings.monthlyCapUsd, onboarded: settings.onboarded,
     rules: Object.fromEntries((settings.rules || []).map((r) => [r.id, describeRule(r)]))
   };
