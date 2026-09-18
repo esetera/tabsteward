@@ -29,6 +29,8 @@ export const DEFAULT_SETTINGS = {
   monthlyCapUsd: 5,
   tidyIntervalMinutes: 15,
   autoGroupNewTabs: true,
+  // Automatic grouping leaves a loose tab alone until nothing has touched it for this long.
+  handsOffMinutes: 20,
   autoTidy: true,
   minGroupSize: 2,
   notifications: true,

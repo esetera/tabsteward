@@ -2,7 +2,8 @@
 // tabs to the Attic, and knows how to undo a batch.
 import { getState, updateState, getSettings, uid } from './store.js';
 import { ensureGroup, keyForGroup, touchGroup, groupSnapshot } from './groups.js';
-import { getTabMeta, setTabMeta } from './tabmeta.js';
+import { getTabMeta, setTabMeta, markStewardMove } from './tabmeta.js';
+export { markStewardMove };
 
 const LOG_MAX = 500;
 const ATTIC_MAX = 2000;
@@ -123,8 +124,12 @@ export async function execute(action) {
       const previous = tabs.map((t) => ({ id: t.id, groupId: t.groupId, windowId: t.windowId, index: t.index }));
       const previousGroups = await groupSnapshot(tabs);
       const away = action.windowId === undefined ? [] : movable.filter((t) => t.windowId !== action.windowId).map((t) => t.id);
+      // Mark before moving: a cross-window move ungroups the tab, which must not read as the user's doing.
+      await markStewardMove(ids);
       if (away.length) await browser.tabs.move(away, { windowId: action.windowId, index: -1 });
       const groupId = await ensureGroup(action.windowId, action.title, ids, { color: action.color, category: action.category });
+      // Tabs moved into a folded group would vanish from where the user was: open it.
+      try { const g = await browser.tabGroups.get(groupId); if (g.collapsed || action.expand) await browser.tabGroups.update(groupId, { collapsed: false }); } catch { /* gone */ }
       undo = { previous, previousGroups, groupId };
       action.groupId = groupId;
       break;
@@ -132,6 +137,8 @@ export async function execute(action) {
     case 'ungroup': {
       const ids = tabs.map((t) => t.id);
       if (!ids.length) return null;
+      // Ungrouping you asked for is your placement and sticks; the steward's own ungrouping is not.
+      if (action.trigger === 'user') { for (const id of ids) await setTabMeta(id, { userPlaced: true, userPlacedAt: Date.now() }); } else await markStewardMove(ids);
       await browser.tabs.ungroup(ids);
       for (const id of ids) await setTabMeta(id, { groupKey: null });
       break;
@@ -253,6 +260,7 @@ export async function undoBatch(batchId) {
             if (away.length) { try { await browser.windows.get(home); await browser.tabs.move(away, { windowId: home, index: -1 }); } catch { /* window closed; stay */ } }
           }
           let back = false;
+          await markStewardMove(ids);
           if (prev !== -1) { try { await browser.tabGroups.get(prev); await browser.tabs.group({ tabIds: ids, groupId: prev }); back = true; } catch { back = false; } }
           if (!back && prev !== -1 && e.undo.previousGroups && e.undo.previousGroups[prev]) {
             // The old group emptied and Firefox dropped it: rebuild it with its title and colour.
